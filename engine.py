@@ -1,0 +1,159 @@
+"""
+Retro Alpha market simulation engine.
+"""
+
+from dataclasses import dataclass, field
+from typing import Dict, List
+
+import numpy as np
+
+ASSETS = ["cash", "fd", "gov_bonds", "nifty_50", "nifty_it", "real_estate", "crypto", "gold"]
+
+REGIMES = [
+    "bull_market", "bear_market", "market_crash", "recovery", "high_inflation",
+    "rate_hike", "rate_cut", "election_year", "monsoon_shock", "fii_exit",
+    "tech_boom", "real_estate_boom", "crypto_frenzy", "gold_rush", "stagnation"
+]
+
+# Annualized expected returns and volatilities (calibrated for simulation)
+ASSET_PARAMS = {
+    "cash":      {"mean": 0.00, "vol": 0.01},
+    "fd":        {"mean": 0.065, "vol": 0.005},
+    "gov_bonds": {"mean": 0.07, "vol": 0.06},
+    "nifty_50":  {"mean": 0.12, "vol": 0.16},
+    "nifty_it":  {"mean": 0.15, "vol": 0.28},
+    "real_estate":{"mean": 0.10, "vol": 0.18},
+    "crypto":    {"mean": 0.20, "vol": 0.65},
+    "gold":      {"mean": 0.08, "vol": 0.14},
+}
+
+CORRELATION = 0.3
+
+
+@dataclass
+class GameState:
+    month: int = 0
+    year: int = 1
+    prices: Dict[str, float] = field(default_factory=lambda: {a: 1.0 for a in ASSETS})
+    portfolio: Dict[str, float] = field(default_factory=lambda: {a: 0.0 for a in ASSETS})
+    cash_balance: float = 1_000_000.0
+    news: Dict = field(default_factory=dict)
+    agent_actions: List[Dict] = field(default_factory=list)
+    ledger: List[Dict] = field(default_factory=list)
+    game_over: bool = False
+    won: bool = False
+
+    def total_value(self) -> float:
+        return self.cash_balance + sum(self.portfolio[a] * self.prices[a] for a in ASSETS)
+
+
+def new_game(starting_cash: float = 1_000_000.0) -> GameState:
+    state = GameState(cash_balance=starting_cash)
+    state.portfolio = {a: 0.0 for a in ASSETS}
+    return state
+
+
+def price_shock(state: GameState, impact: Dict[str, float]):
+    """Apply a news-driven price shock."""
+    for asset in ASSETS:
+        if asset in impact:
+            state.prices[asset] *= (1 + impact[asset])
+
+
+def random_walk(state: GameState):
+    """Apply monthly random price drift correlated across assets."""
+    n = len(ASSETS)
+    corr_matrix = np.full((n, n), CORRELATION) + np.eye(n) * (1 - CORRELATION)
+    shocks = np.random.multivariate_normal(np.zeros(n), corr_matrix)
+    for i, asset in enumerate(ASSETS):
+        params = ASSET_PARAMS[asset]
+        monthly_mean = params["mean"] / 12
+        monthly_vol = params["vol"] / np.sqrt(12)
+        ret = monthly_mean + monthly_vol * shocks[i]
+        state.prices[asset] *= (1 + ret)
+
+
+def apply_agent_trades(state: GameState, agent_actions: List[Dict]):
+    """Apply agent trades to prices via order-flow pressure."""
+    pressure = {a: 0.0 for a in ASSETS}
+    for action in agent_actions:
+        for item in action.get("actions", []):
+            asset = item["asset"]
+            amt = item["amount_pct"] * (1 if item["action"] == "buy" else -1)
+            pressure[asset] += amt
+    for asset in ASSETS:
+        # Agent flow moves price by up to 3%
+        state.prices[asset] *= (1 + pressure[asset] * 0.03)
+
+
+def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: float):
+    """Execute a player trade. amount_pct is relative to total portfolio value."""
+    total = state.total_value()
+    trade_value = total * amount_pct
+
+    if action == "buy":
+        if state.cash_balance < trade_value:
+            trade_value = state.cash_balance
+        shares = trade_value / state.prices[asset]
+        state.cash_balance -= trade_value
+        state.portfolio[asset] += shares
+    elif action == "sell":
+        current_value = state.portfolio[asset] * state.prices[asset]
+        sell_value = min(trade_value, current_value)
+        shares = sell_value / state.prices[asset]
+        state.portfolio[asset] -= shares
+        state.cash_balance += sell_value
+
+    state.ledger.append({
+        "month": state.month,
+        "year": state.year,
+        "asset": asset,
+        "action": action,
+        "amount_pct": amount_pct,
+        "value": trade_value,
+    })
+
+
+def advance_month(state: GameState, news: Dict, agent_actions: List[Dict]):
+    """Advance the simulation by one month."""
+    state.month += 1
+    if state.month > 12:
+        state.month = 1
+        state.year += 1
+
+    state.news = news
+    state.agent_actions = agent_actions
+
+    if news.get("impact"):
+        price_shock(state, news["impact"])
+
+    apply_agent_trades(state, agent_actions)
+    random_walk(state)
+
+    if state.year > 10:
+        state.game_over = True
+        state.won = state.total_value() >= 1_000_000
+
+
+def year_end_summary(state: GameState) -> Dict:
+    """Compute year-end stats for the mentor."""
+    year_ledger = [t for t in state.ledger if t["year"] == state.year]
+    values = [state.total_value()]  # simplified
+    returns = np.diff(values) / values[:-1] if len(values) > 1 else [0.0]
+    sharpe = (np.mean(returns) / (np.std(returns) + 1e-9)) * np.sqrt(12)
+
+    total = state.total_value()
+    allocations = {}
+    for asset in ASSETS:
+        val = state.portfolio[asset] * state.prices[asset]
+        allocations[asset] = round(val / total, 3) if total > 0 else 0.0
+
+    return {
+        "year": state.year,
+        "starting_value": 1_000_000,
+        "ending_value": total,
+        "max_drawdown": -0.25,  # placeholder
+        "sharpe_ratio": round(sharpe, 2),
+        "allocations": allocations,
+        "ledger": year_ledger,
+    }

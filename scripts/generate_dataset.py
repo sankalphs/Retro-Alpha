@@ -10,7 +10,6 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Any
 
 import aiohttp
 from dotenv import load_dotenv
