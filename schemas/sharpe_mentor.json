@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "SharpeMentor",
+  "required": ["roast", "sharpe_ratio", "lesson", "suggestion"],
+  "properties": {
+    "roast": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 300
+    },
+    "sharpe_ratio": {
+      "type": "number"
+    },
+    "lesson": {
+      "type": "string",
+      "minLength": 50,
+      "maxLength": 500
+    },
+    "suggestion": {
+      "type": "string",
+      "minLength": 30,
+      "maxLength": 300
+    }
+  }
+}

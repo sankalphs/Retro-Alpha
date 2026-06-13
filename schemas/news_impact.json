@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "NewsImpact",
+  "required": ["headline", "impact", "duration_months"],
+  "properties": {
+    "headline": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 160
+    },
+    "impact": {
+      "type": "object",
+      "required": ["cash", "fd", "gov_bonds", "nifty_50", "nifty_it", "real_estate", "crypto", "gold"],
+      "properties": {
+        "cash": { "type": "number", "minimum": -0.3, "maximum": 0.3 },
+        "fd": { "type": "number", "minimum": -0.3, "maximum": 0.3 },
+        "gov_bonds": { "type": "number", "minimum": -0.3, "maximum": 0.3 },
+        "nifty_50": { "type": "number", "minimum": -0.3, "maximum": 0.3 },
+        "nifty_it": { "type": "number", "minimum": -0.3, "maximum": 0.3 },
+        "real_estate": { "type": "number", "minimum": -0.3, "maximum": 0.3 },
+        "crypto": { "type": "number", "minimum": -0.5, "maximum": 0.5 },
+        "gold": { "type": "number", "minimum": -0.3, "maximum": 0.3 }
+      }
+    },
+    "duration_months": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12
+    }
+  }
+}

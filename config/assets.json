@@ -1,0 +1,68 @@
+{
+  "assets": [
+    {
+      "id": "cash",
+      "name": "Cash (INR)",
+      "ticker": "INR",
+      "class": "cash",
+      "risk": "none",
+      "description": "Liquid Indian rupees. Safe but eroded by inflation."
+    },
+    {
+      "id": "fd",
+      "name": "Bank Fixed Deposit",
+      "ticker": "FD",
+      "class": "cash-like",
+      "risk": "very_low",
+      "description": "Indian bank FD yielding 6-7% annually."
+    },
+    {
+      "id": "gov_bonds",
+      "name": "Government Bonds",
+      "ticker": "GSEC",
+      "class": "bonds",
+      "risk": "low",
+      "description": "Indian G-Secs. Sensitive to RBI repo rate changes."
+    },
+    {
+      "id": "nifty_50",
+      "name": "Nifty 50",
+      "ticker": "NIFTY",
+      "class": "equity",
+      "risk": "medium",
+      "description": "Large-cap Indian equity index."
+    },
+    {
+      "id": "nifty_it",
+      "name": "Nifty IT",
+      "ticker": "ITIDX",
+      "class": "tech_equity",
+      "risk": "high",
+      "description": "Indian technology sector index. High growth, high volatility."
+    },
+    {
+      "id": "real_estate",
+      "name": "Real Estate (REITs)",
+      "ticker": "REIT",
+      "class": "alternative",
+      "risk": "medium_high",
+      "description": "Indian real estate investment trusts and property index."
+    },
+    {
+      "id": "crypto",
+      "name": "Crypto (BTC/ETH)",
+      "ticker": "CRYPTO",
+      "class": "crypto",
+      "risk": "very_high",
+      "description": "Unregulated digital assets. Extreme volatility."
+    },
+    {
+      "id": "gold",
+      "name": "Gold",
+      "ticker": "GOLD",
+      "class": "commodity",
+      "risk": "medium",
+      "description": "Physical and paper gold. Indian safe haven and inflation hedge."
+    }
+  ]
+}
