@@ -10,8 +10,15 @@ from fastapi.responses import HTMLResponse
 from gradio import Server
 
 import agents
+import download_model
 import engine
 import mentor
+
+# Ensure model is available locally
+try:
+    agents.MODEL_PATH = download_model.download()
+except Exception as e:
+    print(f"Model download failed: {e}. Will use mock mode if no local model exists.")
 
 app = Server()
 ROOT = Path(__file__).resolve().parent

@@ -14,6 +14,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install training deps if needed (commented by default)
+# COPY requirements-train.txt .
+# RUN pip install --no-cache-dir -r requirements-train.txt
+
 # Copy application code
 COPY . .
 

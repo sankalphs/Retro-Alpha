@@ -56,4 +56,9 @@ Build "Retro Alpha", a 90s CRT trading terminal game for the Hugging Face Build 
 - Generated 3,000 rows with MiniMax-M3 text format; validated down to 1,269 clean rows.
 - Generated 500 extra mentor rows; 177 valid. Final dataset: 1,446 rows.
 - Final distribution: ~730 agent, ~281 news, ~255 mentor, ~180 guardrail.
-- Next: push dataset to HF and run Modal LoRA fine-tuning.
+- Built Gradio Server backend (`app.py`) with game API endpoints.
+- Built CRT terminal frontend (`static/`) with scanlines, flicker, ticker, portfolio chart, agent log.
+- Added `engine.py` simulation, `agents.py` LLM inference wrapper, `mentor.py` year-end review.
+- Added Dockerfile, pytest suite, GitHub Actions CI/CD.
+- Pushed two commits to GitHub.
+- Blocked on: HF_TOKEN and MODAL_TOKEN needed for dataset upload + fine-tuning.
