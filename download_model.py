@@ -24,7 +24,11 @@ def _local_path() -> Path:
 def download() -> str:
     """Ensure the GGUF model is available locally. Returns the local path
     as a string. Never raises — returns the expected path even on
-    failure so callers can surface a precise error to the user."""
+    failure so callers can surface a precise error to the user.
+
+    Retries each download mode up to 3 times with exponential backoff
+    to survive transient network failures on cold starts."""
+    import time
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     local = _local_path()
 
@@ -34,29 +38,32 @@ def download() -> str:
         return str(local)
 
     token = os.getenv("HF_TOKEN")
-    # Try with token first (for private repos), then anonymously (public).
     for attempt_token, label in [(token, "with token"), (None, "anonymously")]:
         if attempt_token == "":
             attempt_token = None
-        try:
-            print(f"Downloading {MODEL_FILE} from {MODEL_REPO} ({label})...")
-            from huggingface_hub import hf_hub_download
-            path = hf_hub_download(
-                repo_id=MODEL_REPO,
-                filename=MODEL_FILE,
-                local_dir=str(MODEL_DIR),
-                local_dir_use_symlinks=False,
-                token=attempt_token,
-            )
-            print(f"Download complete: {path}")
-            return str(path)
-        except Exception as e:
-            print(f"Download attempt failed ({label}): {type(e).__name__}: {e}")
-            if attempt_token is None:
-                break  # don't retry anonymous again
+        for attempt in range(1, 4):
+            try:
+                print(f"Downloading {MODEL_FILE} from {MODEL_REPO} ({label}, attempt {attempt}/3)...")
+                from huggingface_hub import hf_hub_download
+                path = hf_hub_download(
+                    repo_id=MODEL_REPO,
+                    filename=MODEL_FILE,
+                    local_dir=str(MODEL_DIR),
+                    local_dir_use_symlinks=False,
+                    token=attempt_token,
+                )
+                print(f"Download complete: {path}")
+                return str(path)
+            except Exception as e:
+                print(f"Download attempt {attempt} failed ({label}): {type(e).__name__}: {e}")
+                if attempt < 3:
+                    time.sleep(2 ** attempt)  # 2s, 4s
+                else:
+                    break
+        # If anonymous mode also failed, no point retrying it
+        if attempt_token is None:
+            break
 
-    # Download failed; return the expected path so the app can report
-    # a clear "model not found" error rather than crashing.
     print(f"Model download failed. Expected at: {local}")
     return str(local)
 

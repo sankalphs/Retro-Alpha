@@ -20,12 +20,19 @@ app = FastAPI(title="Retro Alpha")
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
-# Load the local LLM once at startup. All endpoints share this single LLM.
+# Ensure the GGUF is on disk, then eagerly load it into RAM so
+# /api/health reflects the REAL status (not "uninitialized") as soon
+# as the container is up. Lazy-loading would race the first health
+# check and surface a generic "model not loaded" with no error reason.
 try:
     agents.MODEL_PATH = download_model.download()
-    print(f"Model path set to: {agents.MODEL_PATH}")
+    print(f"Model path: {agents.MODEL_PATH}")
+    print("Eagerly loading LLM into memory (this may take ~10-60s)...")
+    _ = agents.get_llm()  # triggers Llama(...) load; sets status + error
+    err = agents.llm_error()
+    print(f"LLM status: {agents.llm_status()} ({err or 'ok'})")
 except Exception as e:
-    print(f"Model download wrapper failed: {e}. Endpoints will use deterministic fallbacks.")
+    print(f"Startup LLM init failed: {e}")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
