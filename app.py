@@ -1,6 +1,6 @@
 """
 Retro Alpha — FastAPI backend.
-Serves the static frontend and the deterministic endpoints (chat, mentor,
+Serves the static frontend and the LLM-backed endpoints (chat, mentor,
 insight). The game itself runs 100% in the browser (see static/engine.js);
 the server holds NO per-user state. This guarantees every browser tab has
 its own independent game.
@@ -14,10 +14,27 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import agents
+import download_model
 
 app = FastAPI(title="Retro Alpha")
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
+
+# Ensure the GGUF is on disk, then kick off the model load in a
+# background thread. uvicorn opens the port IMMEDIATELY so HF Spaces'
+# health check passes during the slow cold-start download + compile;
+# /api/health reports the real status throughout.
+try:
+    agents.MODEL_PATH = download_model.download()
+    print(f"Model path: {agents.MODEL_PATH}")
+except Exception as e:
+    print(f"download_model.download() failed: {e}")
+
+
+@app.on_event("startup")
+def _on_startup():
+    agents.start_background_load()
+
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -30,10 +47,14 @@ async def homepage():
 
 @app.get("/api/health")
 def health() -> JSONResponse:
+    mp = Path(agents.MODEL_PATH)
     return JSONResponse({
         "status": "ok",
         "llm": agents.llm_status(),
         "llm_error": agents.llm_error(),
+        "model_path": str(agents.MODEL_PATH),
+        "model_exists": mp.exists(),
+        "model_size_gb": round(mp.stat().st_size / 1e9, 2) if mp.exists() else 0,
     })
 
 

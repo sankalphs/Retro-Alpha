@@ -1,16 +1,23 @@
 """
-Agent inference using Hugging Face Inference API (fallback: deterministic).
+Agent inference using a local llama.cpp GGUF model.
 
-If HF_TOKEN is set, the hosted model (default google/gemma-2-2b-it) is used
-for chat, mentor, insight, and NPC decisions. If the API is unreachable or
-the token is missing, deterministic rules kick in so the game never breaks.
+Loading is non-blocking: the model is loaded in a background thread
+kicked off by the app's startup event. This lets uvicorn open the port
+immediately (so HF Spaces' health check passes during a slow 2.84 GB
+cold-start download) and surfaces a real "loading" status to the UI.
+
+generate() is therefore non-blocking too:
+  - "loaded"  -> call the real LLM
+  - "mock"    -> return mock_generate(prompt)
+  - otherwise -> return "" so the per-feature deterministic fallbacks
+                 in chat_reply / generate_insight / parse_mentor_response
+                 take over
 """
 
 import json
 import os
 import re
 import threading
-import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -21,27 +28,20 @@ load_dotenv()
 ASSETS = ["cash", "fd", "gov_bonds", "nifty_50", "nifty_it", "real_estate", "crypto", "gold"]
 PERSONAS = ["whale", "retail", "permabull"]
 
-_MODEL_DIR = Path(__file__).resolve().parent / "models"
-MODEL_PATH = os.getenv("MODEL_PATH") or str(_MODEL_DIR / "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf")
+_DEFAULT_MODEL_DIR = Path(__file__).resolve().parent / "models"
+_DEFAULT_MODEL_FILE = "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf"
+MODEL_PATH = os.getenv("MODEL_PATH") or str(_DEFAULT_MODEL_DIR / _DEFAULT_MODEL_FILE)
 
-_HF_TOKEN = os.getenv("HF_TOKEN", "")
-_HF_MODEL = os.getenv("HF_MODEL", "microsoft/Phi-3-mini-4k-instruct")
-
-_client = None
-_llm_status = "mock"
+_llm = None
+_llm_status = "uninitialized"
 _llm_error = ""
+_load_started = False
+_load_lock = threading.Lock()
 
-if _HF_TOKEN:
-    try:
-        from huggingface_hub import InferenceClient
-        _client = InferenceClient(api_key=_HF_TOKEN)
-        _llm_status = "loading"
-        _llm_error = ""
-        print(f"HF Inference client ready. Model: {_HF_MODEL}")
-    except Exception as e:
-        _llm_status = "mock"
-        _llm_error = f"HF client init: {type(e).__name__}"
-        print(f"Warning: HF Inference client failed: {_llm_error}")
+if os.getenv("MOCK_LLM") == "1":
+    _llm = "mock"
+    _llm_status = "mock"
+    _llm_error = "MOCK_LLM=1 (test mode)"
 
 
 def llm_status() -> str:
@@ -52,59 +52,44 @@ def llm_error() -> str:
     return _llm_error
 
 
-def _hf_generate(messages: list, max_tokens: int = 256, temperature: float = 0.7) -> str:
-    if _client is None:
-        return ""
+def _do_load() -> None:
+    global _llm, _llm_status, _llm_error
     try:
-        response = _client.chat_completion(
-            messages=messages,
-            model=_HF_MODEL,
-            max_tokens=max_tokens,
-            temperature=temperature,
+        from llama_cpp import Llama
+        mp = Path(MODEL_PATH)
+        if not mp.exists():
+            raise FileNotFoundError(
+                f"Model file not found at '{mp}'. "
+                f"Set MODEL_PATH or check the download."
+            )
+        size_gb = mp.stat().st_size / 1e9
+        print(f"Loading LLM from {mp} ({size_gb:.2f} GB)...")
+        _llm = Llama(
+            model_path=str(mp),
+            n_ctx=int(os.getenv("LLAMA_CTX", "2048")),
+            n_threads=int(os.getenv("LLAMA_THREADS", "4")),
+            verbose=False,
         )
-        content = response.choices[0].message.content
-        if isinstance(content, str) and content.strip():
-            return clean_text(content)
+        _llm_status = "loaded"
+        _llm_error = ""
+        print("LLM loaded successfully.")
     except Exception as e:
-        global _llm_status, _llm_error
-        msg = str(e)
-        # Extract the actual API error message if present
-        try:
-            body = e.response.json() if hasattr(e, 'response') else None
-            if body and isinstance(body, dict):
-                msg = str(body.get("error", body.get("message", msg)))
-        except Exception:
-            pass
-        _llm_error = msg[:200]
-        print(f"HF API call failed: {msg[:200]}")
-        if _llm_status == "loading":
-            _llm_status = "error"
-    return ""
-
-
-def _warmup() -> None:
-    """Send a tiny request to wake up the HF Inference endpoint from cold start."""
-    global _llm_status
-    try:
-        result = _hf_generate(
-            [{"role": "user", "content": "Say 'ready'."}],
-            max_tokens=4, temperature=0.0,
-        )
-        if result.strip():
-            _llm_status = "loaded"
-            _llm_error = ""
-            print("HF Inference API warm-up OK — LLM online.")
-        else:
-            raise RuntimeError("empty warm-up response")
-    except Exception:
-        pass
+        _llm_error = f"{type(e).__name__}: {e}"
+        print(f"Warning: could not load LLM: {_llm_error}. Using mock mode.")
+        _llm = "mock"
+        _llm_status = "error"
 
 
 def start_background_load() -> None:
-    """Kick off an async warm-up call to the HF Inference API."""
-    if _client is None or _llm_status == "loaded":
+    global _load_started, _llm_status
+    if _llm_status == "mock":
         return
-    t = threading.Thread(target=_warmup, name="hf-warmup", daemon=True)
+    with _load_lock:
+        if _load_started:
+            return
+        _load_started = True
+        _llm_status = "loading"
+    t = threading.Thread(target=_do_load, name="llm-loader", daemon=True)
     t.start()
 
 
@@ -118,22 +103,34 @@ def clean_text(text: str) -> str:
 
 
 def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: float = 0.7) -> str:
-    """Generate via HF Inference API if available, else deterministic fallback.
+    if _llm_status == "mock":
+        return mock_generate(prompt, system)
+    if _llm_status != "loaded":
+        return ""
+    llm = _llm
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    for attempt, (mt, temp) in enumerate([(max_tokens, temperature), (max_tokens, 0.2)]):
+        try:
+            response = llm.create_chat_completion(
+                messages=messages, max_tokens=mt, temperature=temp,
+            )
+        except Exception as e:
+            print(f"Warning: LLM call failed (attempt {attempt}): {e}.")
+            continue
+        try:
+            content = response["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            continue
+        if isinstance(content, str) and content.strip():
+            return clean_text(content)
+    print("Warning: LLM returned empty content after retries.")
+    return ""
 
-    Returns "" on failure so per-feature deterministic fallbacks in callers
-    (chat_reply, generate_insight, parse_mentor_response) take over.
-    """
-    # Try HF API first
-    if _client is not None and _llm_status != "mock":
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        text = _hf_generate(messages, max_tokens=max_tokens, temperature=temperature)
-        if text:
-            return text
 
-    # Deterministic fallback
+def mock_generate(prompt: str, system: str = "") -> str:
     p = prompt.lower()
     s = system.lower()
     if "agent" in p and "whale" in p:
@@ -254,7 +251,10 @@ def generate_insight(event: Dict, state_snapshot: Dict) -> str:
         f"Player P&L ₹{pnl:,.0f}, cash {cash_pct:.0f}%, total ₹{total:,.0f}. "
         f"One actionable sentence."
     )
-    text = generate(prompt, system=system, max_tokens=80, temperature=0.4).strip()
+    try:
+        text = generate(prompt, system=system, max_tokens=80, temperature=0.4).strip()
+    except Exception:
+        text = ""
     if not text:
         if pnl < -50_000:
             text = f"Cut losers in {regime.replace('_', ' ')} regimes and rotate into defensives."
@@ -286,7 +286,10 @@ def chat_reply(user_message: str, state_snapshot: Dict) -> str:
         f"unrealized P&L ₹{pnl:,.0f}. Positions: {pos_lines}.\n"
         f"Player: {user_message}\nReply in 2-3 short sentences."
     )
-    text = generate(prompt, system=system, max_tokens=140, temperature=0.5).strip()
+    try:
+        text = generate(prompt, system=system, max_tokens=140, temperature=0.5).strip()
+    except Exception:
+        text = ""
     if not text:
         if "buy" in user_message.lower() or "should i" in user_message.lower():
             text = f"With cash at ₹{cash:,.0f} and P&L ₹{pnl:,.0f}, I'd wait for a confirmed trend before adding. Check the chart for support levels."
