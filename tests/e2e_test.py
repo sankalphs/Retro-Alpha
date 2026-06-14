@@ -165,6 +165,25 @@ check("mentor has review", "review" in data)
 check("mentor review has roast", "roast" in data["review"])
 check("mentor review has lesson", "lesson" in data["review"])
 check("mentor review has suggestion", "suggestion" in data["review"])
+# No raw parse error leaks
+rev = data["review"]
+check("roast is not raw parse error", rev["roast"] != "Could not parse review.")
+check("no 'Parse error' in lesson", "Parse error" not in rev.get("lesson", ""))
+
+print("\n=== Mentor fallback (forced empty LLM) returns real roast ===")
+_orig_gen = app_module.mentor.generate
+def _empty_llm(summary):
+    return app_module.mentor.parse_mentor_response("", summary)
+app_module.mentor.generate_review = _empty_llm
+try:
+    r = client.get("/api/mentor")
+    check("mentor fallback 200", r.status_code == 200)
+    rev2 = r.json()["review"]
+    check("fallback roast is real (not parse error)", rev2["roast"] != "Could not parse review.")
+    check("fallback roast non-empty", len(rev2["roast"]) > 0)
+    check("fallback suggestion non-empty", len(rev2["suggestion"]) > 0)
+finally:
+    app_module.mentor.generate_review = _orig_gen
 
 print("\n=== Reset ===")
 r = client.post("/api/reset")

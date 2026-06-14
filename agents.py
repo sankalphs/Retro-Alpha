@@ -63,26 +63,29 @@ def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: 
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    try:
-        response = llm.create_chat_completion(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    except Exception as e:
-        print(f"Warning: LLM call failed: {e}. Returning empty response.")
-        return ""
+    # Try once, then retry with a lower temperature if empty (model can
+    # produce empty/garbage on the first try under high temperature).
+    for attempt, (mt, temp) in enumerate([(max_tokens, temperature), (max_tokens, 0.2)]):
+        try:
+            response = llm.create_chat_completion(
+                messages=messages,
+                max_tokens=mt,
+                temperature=temp,
+            )
+        except Exception as e:
+            print(f"Warning: LLM call failed (attempt {attempt}): {e}.")
+            continue
 
-    try:
-        content = response["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as e:
-        print(f"Warning: malformed LLM response: {e}. Returning empty response.")
-        return ""
+        try:
+            content = response["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            continue
 
-    if not isinstance(content, str):
-        content = "" if content is None else str(content)
+        if isinstance(content, str) and content.strip():
+            return clean_text(content)
 
-    return clean_text(content)
+    print("Warning: LLM returned empty content after retries.")
+    return ""
 
 
 def mock_generate(prompt: str, system: str = "") -> str:
