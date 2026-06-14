@@ -65,25 +65,34 @@ check("goal_value is 2M", s["goal_value"] == 2_000_000)
 print("\n=== Trades ===")
 tradable = ["Nifty 50", "Nifty IT", "FD", "Gov Bonds", "Real Estate", "Crypto", "Gold"]
 for asset in tradable:
-    r = client.post("/api/trade", json={"asset": asset, "action": "buy", "amount_pct": 0.1})
-    check(f"buy {asset} 200", r.status_code == 200, f"got {r.status_code}: {r.json()}")
+    r = client.post("/api/trade", json={"asset": asset, "action": "buy", "amount_pct": 10})
+    check(f"buy {asset} 10% 200", r.status_code == 200, f"got {r.status_code}: {r.json()}")
     s = r.json()
     check(f"  cash decreased for {asset}", s["cash"] < 1_000_000, f"cash={s['cash']}")
     # reset between trades
     client.post("/api/reset")
 
+# Regression: exact value the user typed (15%)
+r = client.post("/api/trade", json={"asset": "Nifty 50", "action": "buy", "amount_pct": 15})
+check("buy Nifty 50 15% (user-reported)", r.status_code == 200, f"got {r.status_code}: {r.json()}")
+s = r.json()
+check("  cash ~850k after 15%", abs(s["cash"] - 850_000) < 1000, f"cash={s['cash']}")
+
 print("\n=== Invalid trades ===")
-r = client.post("/api/trade", json={"asset": "Cash", "action": "buy", "amount_pct": 0.1})
+r = client.post("/api/trade", json={"asset": "Cash", "action": "buy", "amount_pct": 10})
 check("buy Cash rejected", r.status_code == 400, f"got {r.status_code}")
 
-r = client.post("/api/trade", json={"asset": "Banana", "action": "buy", "amount_pct": 0.1})
+r = client.post("/api/trade", json={"asset": "Banana", "action": "buy", "amount_pct": 10})
 check("buy Banana rejected", r.status_code == 400, f"got {r.status_code}")
 
-r = client.post("/api/trade", json={"asset": "Nifty 50", "action": "hold", "amount_pct": 0.1})
+r = client.post("/api/trade", json={"asset": "Nifty 50", "action": "hold", "amount_pct": 10})
 check("invalid action rejected", r.status_code == 400, f"got {r.status_code}")
 
-r = client.post("/api/trade", json={"asset": "Nifty 50", "action": "buy", "amount_pct": 1.5})
-check("amount > 100% rejected", r.status_code == 400, f"got {r.status_code}")
+r = client.post("/api/trade", json={"asset": "Nifty 50", "action": "buy", "amount_pct": 150})
+check("amount > 100 rejected", r.status_code == 400, f"got {r.status_code}")
+
+r = client.post("/api/trade", json={"asset": "Nifty 50", "action": "buy", "amount_pct": 0})
+check("amount = 0 rejected", r.status_code == 400, f"got {r.status_code}")
 
 print("\n=== Advance month ===")
 client.post("/api/reset")

@@ -20,6 +20,10 @@ MODEL_PATH = os.getenv("MODEL_PATH", "models/retro-alpha-nemotron-q4_k_m.gguf")
 
 _llm = None
 
+# Allow forcing mock mode for fast local testing / CI
+if os.getenv("MOCK_LLM") == "1":
+    _llm = "mock"
+
 
 def get_llm():
     global _llm

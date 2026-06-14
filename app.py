@@ -107,11 +107,11 @@ async def make_trade(request: Request) -> JSONResponse:
         )
     if action not in ("buy", "sell"):
         return JSONResponse({"error": "Invalid action"}, status_code=400)
-    if amount_pct <= 0 or amount_pct > 1:
+    if amount_pct <= 0 or amount_pct > 100:
         return JSONResponse({"error": "Amount must be between 0 and 100%"}, status_code=400)
 
     try:
-        engine.execute_player_trade(_game_state, asset_key, action, amount_pct)
+        engine.execute_player_trade(_game_state, asset_key, action, amount_pct / 100.0)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(_translate_state(_game_state))
