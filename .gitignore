@@ -67,3 +67,6 @@ temp/
 # Node / frontend build (if added later)
 node_modules/
 *.lock
+
+# AI assistant session data
+.opencode/

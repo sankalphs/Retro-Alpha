@@ -29,11 +29,17 @@ ASSET_PARAMS = {
 
 CORRELATION = 0.3
 
+STARTING_YEAR = 1994
+STARTING_MONTH = 4
+GAME_LENGTH_MONTHS = 120  # 10 years
+WIN_THRESHOLD = 2_000_000.0
+
 
 @dataclass
 class GameState:
-    month: int = 0
-    year: int = 1
+    year: int = STARTING_YEAR
+    month: int = STARTING_MONTH
+    months_elapsed: int = 0
     prices: Dict[str, float] = field(default_factory=lambda: {a: 1.0 for a in ASSETS})
     portfolio: Dict[str, float] = field(default_factory=lambda: {a: 0.0 for a in ASSETS})
     cash_balance: float = 1_000_000.0
@@ -56,16 +62,19 @@ def new_game(starting_cash: float = 1_000_000.0) -> GameState:
 def price_shock(state: GameState, impact: Dict[str, float]):
     """Apply a news-driven price shock."""
     for asset in ASSETS:
+        if asset == "cash":
+            continue
         if asset in impact:
             state.prices[asset] *= (1 + impact[asset])
 
 
 def random_walk(state: GameState):
     """Apply monthly random price drift correlated across assets."""
-    n = len(ASSETS)
+    tradable = [a for a in ASSETS if a != "cash"]
+    n = len(tradable)
     corr_matrix = np.full((n, n), CORRELATION) + np.eye(n) * (1 - CORRELATION)
     shocks = np.random.multivariate_normal(np.zeros(n), corr_matrix)
-    for i, asset in enumerate(ASSETS):
+    for i, asset in enumerate(tradable):
         params = ASSET_PARAMS[asset]
         monthly_mean = params["mean"] / 12
         monthly_vol = params["vol"] / np.sqrt(12)
@@ -78,8 +87,10 @@ def apply_agent_trades(state: GameState, agent_actions: List[Dict]):
     pressure = {a: 0.0 for a in ASSETS}
     for action in agent_actions:
         for item in action.get("actions", []):
-            asset = item["asset"]
-            amt = item["amount_pct"] * (1 if item["action"] == "buy" else -1)
+            asset = item.get("asset", "cash")
+            if asset not in pressure:
+                continue
+            amt = item.get("amount_pct", 0.0) * (1 if item.get("action") == "buy" else -1)
             pressure[asset] += amt
     for asset in ASSETS:
         # Agent flow moves price by up to 3%
@@ -88,18 +99,24 @@ def apply_agent_trades(state: GameState, agent_actions: List[Dict]):
 
 def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: float):
     """Execute a player trade. amount_pct is relative to total portfolio value."""
+    if asset not in state.prices:
+        raise ValueError(f"Unknown asset: {asset}")
+
     total = state.total_value()
     trade_value = total * amount_pct
 
     if action == "buy":
-        if state.cash_balance < trade_value:
-            trade_value = state.cash_balance
+        trade_value = min(trade_value, state.cash_balance)
+        if trade_value <= 0:
+            return
         shares = trade_value / state.prices[asset]
         state.cash_balance -= trade_value
         state.portfolio[asset] += shares
     elif action == "sell":
         current_value = state.portfolio[asset] * state.prices[asset]
         sell_value = min(trade_value, current_value)
+        if sell_value <= 0:
+            return
         shares = sell_value / state.prices[asset]
         state.portfolio[asset] -= shares
         state.cash_balance += sell_value
@@ -116,6 +133,10 @@ def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: 
 
 def advance_month(state: GameState, news: Dict, agent_actions: List[Dict]):
     """Advance the simulation by one month."""
+    if state.game_over:
+        return
+
+    state.months_elapsed += 1
     state.month += 1
     if state.month > 12:
         state.month = 1
@@ -130,9 +151,9 @@ def advance_month(state: GameState, news: Dict, agent_actions: List[Dict]):
     apply_agent_trades(state, agent_actions)
     random_walk(state)
 
-    if state.year > 10:
+    if state.months_elapsed >= GAME_LENGTH_MONTHS:
         state.game_over = True
-        state.won = state.total_value() >= 1_000_000
+        state.won = bool(state.total_value() >= WIN_THRESHOLD)
 
 
 def year_end_summary(state: GameState) -> Dict:
@@ -157,3 +178,4 @@ def year_end_summary(state: GameState) -> Dict:
         "allocations": allocations,
         "ledger": year_ledger,
     }
+

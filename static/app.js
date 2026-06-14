@@ -62,24 +62,25 @@ function render() {
   els.returns.textContent = `Return: ${fmtPct(ret)}`;
   els.returns.style.color = ret >= 0 ? "var(--phosphor)" : "var(--red)";
   els.cashLine.textContent = `Cash: ${fmtMoney(s.cash)}`;
-  els.goalLine.textContent = `Goal: ${fmtMoney(2_000_000)} by April 2004`;
+  els.goalLine.textContent = `Goal: ${fmtMoney(s.goal_value)} by ${s.goal_year}-04`;
 
   // Ticker
-  const tickerParts = Object.entries(s.prices).map(
-    ([asset, price]) => `${asset} ${fmtMoney(price)}`
-  );
+  const tickerParts = Object.entries(s.prices)
+    .filter(([asset]) => asset !== "Cash")
+    .map(([asset, price]) => `${asset} ${fmtMoney(price)}`);
   els.ticker.textContent = tickerParts.join("   //   ") + "   //   ";
 
   // Holdings
   els.holdingsBody.innerHTML = "";
   Object.entries(s.portfolio).forEach(([asset, qty]) => {
-    if (qty <= 0 && asset !== "Cash") return;
+    if (asset === "Cash") return;
+    if (qty <= 0) return;
     const price = s.prices[asset] ?? 1;
-    const value = asset === "Cash" ? s.cash : qty * price;
+    const value = qty * price;
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${asset}</td>
-      <td>${asset === "Cash" ? "-" : qty.toFixed(4)}</td>
+      <td>${qty.toFixed(4)}</td>
       <td>${fmtMoney(price)}</td>
       <td>${fmtMoney(value)}</td>
     `;
@@ -88,15 +89,15 @@ function render() {
 
   // Agent log
   els.agentLog.innerHTML = "";
-  if (s.agent_actions && Object.keys(s.agent_actions).length) {
-    Object.entries(s.agent_actions).forEach(([name, action]) => {
+  if (s.agent_actions && s.agent_actions.length) {
+    s.agent_actions.forEach((a) => {
       const entry = document.createElement("div");
       entry.className = "agent-entry";
       entry.innerHTML = `
-        <span class="name">${name}</span>
-        <span class="action">${action.action}</span>
-        <span class="sentiment">${action.sentiment}</span>
-        <div style="margin-top:4px;color:var(--phosphor-dim)">${action.reasoning}</div>
+        <span class="name">${a.agent}</span>
+        <span class="action">${a.action} ${a.asset}</span>
+        <span class="sentiment">${a.sentiment}</span>
+        <div style="margin-top:4px;color:var(--phosphor-dim)">${a.reason}</div>
       `;
       els.agentLog.appendChild(entry);
     });
@@ -105,9 +106,9 @@ function render() {
   }
 
   // News
-  if (s.news) {
+  if (s.news && s.news.headline) {
     const item = document.createElement("div");
-    item.textContent = `[${s.year}-${String(s.month).padStart(2, "0")}] ${s.news}`;
+    item.textContent = `[${s.year}-${String(s.month).padStart(2, "0")}] ${s.news.headline}`;
     item.style.marginBottom = "8px";
     item.style.borderBottom = "1px dashed rgba(51,255,51,0.15)";
     item.style.paddingBottom = "8px";
