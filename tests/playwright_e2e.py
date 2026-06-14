@@ -15,9 +15,6 @@ except Exception:
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Force mock LLM
-os.environ["MOCK_LLM"] = "1"
-
 import uvicorn
 import app as app_module
 from playwright.sync_api import sync_playwright
@@ -65,7 +62,7 @@ def run_server():
     return server
 
 
-print("Starting server (MOCK_LLM=1)...")
+print("Starting server...")
 server = run_server()
 print("Server ready.\n")
 

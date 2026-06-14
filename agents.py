@@ -1,24 +1,13 @@
 """
-Agent inference using a local llama.cpp GGUF model.
+Deterministic agent inference — no LLM dependency.
 
-Loading is non-blocking: the model is loaded in a background thread
-kicked off by the app's startup event. This lets uvicorn open the port
-immediately (so HF Spaces' health check passes during a slow 2.84 GB
-cold-start download) and surfaces a real "loading" status to the UI
-instead of the generic "model not loaded" race condition.
-
-generate() is therefore non-blocking too:
-  - "loaded"  -> call the real LLM
-  - "mock"    -> return mock_generate(prompt)
-  - otherwise -> return "" so the per-feature deterministic fallbacks
-                 in chat_reply / generate_insight / parse_mentor_response
-                 take over
+All chat, mentor, insight, and NPC agent responses are generated from
+the player's actual portfolio numbers using deterministic rules.
 """
 
 import json
 import os
 import re
-import threading
 from pathlib import Path
 from typing import Dict, List
 
@@ -29,23 +18,11 @@ load_dotenv()
 ASSETS = ["cash", "fd", "gov_bonds", "nifty_50", "nifty_it", "real_estate", "crypto", "gold"]
 PERSONAS = ["whale", "retail", "permabull"]
 
-# Default model path. MUST match the GGUF file in the repo.
-# Override via MODEL_PATH env var if you use a different filename.
-_DEFAULT_MODEL_DIR = Path(__file__).resolve().parent / "models"
-_DEFAULT_MODEL_FILE = "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf"
-MODEL_PATH = os.getenv("MODEL_PATH") or str(_DEFAULT_MODEL_DIR / _DEFAULT_MODEL_FILE)
+_MODEL_DIR = Path(__file__).resolve().parent / "models"
+MODEL_PATH = os.getenv("MODEL_PATH") or str(_MODEL_DIR / "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf")
 
-_llm = None
-_llm_status = "uninitialized"   # "uninitialized" | "loading" | "loaded" | "error" | "mock"
-_llm_error = ""                 # last load/import error, surfaced to UI
-_load_started = False
-_load_lock = threading.Lock()
-
-# Force-mock shortcut (set BEFORE import in tests / CI)
-if os.getenv("MOCK_LLM") == "1":
-    _llm = "mock"
-    _llm_status = "mock"
-    _llm_error = "MOCK_LLM=1 (test mode)"
+_llm_status = "mock"
+_llm_error = ""
 
 
 def llm_status() -> str:
@@ -56,55 +33,8 @@ def llm_error() -> str:
     return _llm_error
 
 
-def _do_load() -> None:
-    """Background worker that actually loads the GGUF into RAM."""
-    global _llm, _llm_status, _llm_error
-    try:
-        from llama_cpp import Llama
-        mp = Path(MODEL_PATH)
-        if not mp.exists():
-            raise FileNotFoundError(
-                f"Model file not found at '{mp}'. "
-                f"Set MODEL_PATH or check the download."
-            )
-        size_gb = mp.stat().st_size / 1e9
-        print(f"Loading LLM from {mp} ({size_gb:.2f} GB)...")
-        _llm = Llama(
-            model_path=str(mp),
-            n_ctx=int(os.getenv("LLAMA_CTX", "2048")),
-            n_threads=int(os.getenv("LLAMA_THREADS", "4")),
-            verbose=False,
-        )
-        _llm_status = "loaded"
-        _llm_error = ""
-        print("LLM loaded successfully.")
-    except Exception as e:
-        _llm_error = f"{type(e).__name__}: {e}"
-        print(f"Warning: could not load LLM: {_llm_error}. Using mock mode.")
-        _llm = "mock"
-        _llm_status = "error"
-
-
 def start_background_load() -> None:
-    """Kick off the model load in a daemon thread. Idempotent and a
-    no-op in MOCK_LLM mode. Safe to call from a FastAPI startup event."""
-    global _load_started, _llm_status
-    if _llm_status == "mock":
-        return
-    with _load_lock:
-        if _load_started:
-            return
-        _load_started = True
-        _llm_status = "loading"
-    t = threading.Thread(target=_do_load, name="llm-loader", daemon=True)
-    t.start()
-
-
-def get_llm():
-    """Return the loaded LLM object. Kept for back-compat with any
-    caller that still uses it; new code should check llm_status() and
-    use generate() (non-blocking) instead."""
-    return _llm
+    pass
 
 
 def clean_text(text: str) -> str:
@@ -117,53 +47,8 @@ def clean_text(text: str) -> str:
 
 
 def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: float = 0.7) -> str:
-    """Non-blocking LLM call.
-
-    - "mock"    -> return mock_generate(prompt)
-    - "loaded"  -> call the real LLM (with a low-temp retry if empty)
-    - anything else (loading / uninitialized / error) -> return ""
-      so the caller's deterministic fallback runs.
-    """
-    if _llm_status == "mock":
-        return mock_generate(prompt, system)
-
-    if _llm_status != "loaded":
-        return ""
-
-    llm = _llm
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    for attempt, (mt, temp) in enumerate([(max_tokens, temperature), (max_tokens, 0.2)]):
-        try:
-            response = llm.create_chat_completion(
-                messages=messages,
-                max_tokens=mt,
-                temperature=temp,
-            )
-        except Exception as e:
-            print(f"Warning: LLM call failed (attempt {attempt}): {e}.")
-            continue
-
-        try:
-            content = response["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            continue
-
-        if isinstance(content, str) and content.strip():
-            return clean_text(content)
-
-    print("Warning: LLM returned empty content after retries.")
-    return ""
-
-
-def mock_generate(prompt: str, system: str = "") -> str:
-    """Deterministic fallback when no model is loaded. Returns canned
-    text for known formats; returns "" for unknown so the per-feature
-    deterministic fallbacks in chat_reply / generate_insight /
-    parse_mentor_response take over (never leak a sentinel)."""
+    """Deterministic generate — returns canned responses for known patterns,
+    empty string for unknown (caller falls back to per-feature deterministic logic)."""
     p = prompt.lower()
     s = system.lower()
     if "agent" in p and "whale" in p:
@@ -178,8 +63,6 @@ def mock_generate(prompt: str, system: str = "") -> str:
         return "insight: Markets are reacting to the headline. Watch for follow-through."
     if "headline" in p:
         return "headline: RBI holds rates steady\nimpact: cash:0 fd:0 gov_bonds:0 nifty_50:0 nifty_it:0 real_estate:0 crypto:0 gold:0\nduration: 1"
-    # Chat and other unknown prompts: return empty so the caller's
-    # deterministic fallback runs.
     return ""
 
 
@@ -238,7 +121,6 @@ def decide_agent(persona: str, state: Dict) -> Dict:
         f"agent: {persona}\naction: <buy|sell|hold> <asset> <amount_pct>\n"
         f"reason: <short reason>\nsentiment: <bullish|bearish|neutral|panic|cautious>"
     )
-    # Keep the state snapshot small to avoid context overflow.
     compact = {
         "month": state.get("month"),
         "year": state.get("year"),
@@ -251,8 +133,6 @@ def decide_agent(persona: str, state: Dict) -> Dict:
 
 
 def generate_news(event: Dict) -> Dict:
-    """Return the news dict. The historical event IS the news; the LLM
-    is optional flavor. We always return a real, impactful headline."""
     headline = event.get("headline", "Markets trade in tight range")
     regime = event.get("regime", "stagnation")
     impact = event.get("impact", {})
@@ -269,11 +149,6 @@ def generate_news(event: Dict) -> Dict:
 
 
 def generate_insight(event: Dict, state_snapshot: Dict) -> str:
-    """Generate a one-sentence AI insight/commentary about this month's event.
-
-    Returns the LLM's commentary if available, else a deterministic insight
-    derived from the event and state. Never empty/None — always a real string.
-    """
     if not event:
         return "Markets are quiet. Use the time to review your allocation."
 
@@ -282,69 +157,31 @@ def generate_insight(event: Dict, state_snapshot: Dict) -> str:
     total = float(state_snapshot.get("total_value", 0.0))
     cash_pct = (cash / total * 100.0) if total else 0.0
     regime = str(event.get("regime", "stagnation"))
-    headline = str(event.get("headline", ""))
 
-    system = (
-        "You are a sharp Indian markets commentator. Given a market event "
-        "and a player's portfolio snapshot, output ONE sentence (under 140 chars) "
-        "of actionable insight. No preamble. Start with the verb."
-    )
-    prompt = (
-        f"Event: {headline} (regime: {regime}). "
-        f"Player P&L ₹{pnl:,.0f}, cash {cash_pct:.0f}%, total ₹{total:,.0f}. "
-        f"One actionable sentence."
-    )
-    try:
-        text = generate(prompt, system=system, max_tokens=80, temperature=0.4).strip()
-    except Exception:
-        text = ""
-    if not text:
-        # Deterministic fallback that always reads like real commentary.
-        if pnl < -50_000:
-            text = f"Cut losers in {regime.replace('_', ' ')} regimes and rotate into defensives."
-        elif pnl > 50_000:
-            text = f"Book partial profits; {regime.replace('_', ' ')} trends rarely last."
-        elif cash_pct > 60:
-            text = "Heavy cash drag. Deploy into bonds or Nifty on dips."
-        else:
-            text = f"Hold the line through this {regime.replace('_', ' ')} phase."
+    if pnl < -50_000:
+        text = f"Cut losers in {regime.replace('_', ' ')} regimes and rotate into defensives."
+    elif pnl > 50_000:
+        text = f"Book partial profits; {regime.replace('_', ' ')} trends rarely last."
+    elif cash_pct > 60:
+        text = "Heavy cash drag. Deploy into bonds or Nifty on dips."
+    else:
+        text = f"Hold the line through this {regime.replace('_', ' ')} phase."
     return text[:200]
 
 
 def chat_reply(user_message: str, state_snapshot: Dict) -> str:
-    """Chatbot reply grounded in the player's current portfolio."""
     pnl = float(state_snapshot.get("unrealized_pnl", 0.0))
     cash = float(state_snapshot.get("cash", 0.0))
     total = float(state_snapshot.get("total_value", 0.0))
-    positions = state_snapshot.get("positions", [])
-    pos_lines = ", ".join(
-        f"{p['asset']} {p['qty']:.2f} @ ₹{p['price']:.0f}" for p in positions[:8]
-    ) or "no positions"
 
-    system = (
-        "You are Retro Alpha, a sharp Indian markets assistant in a 1990s "
-        "stock-trading game. Be concise, witty, and grounded in the player's "
-        "actual positions. 2-3 short sentences max. No fluff."
-    )
-    prompt = (
-        f"Portfolio: total ₹{total:,.0f}, cash ₹{cash:,.0f}, "
-        f"unrealized P&L ₹{pnl:,.0f}. Positions: {pos_lines}.\n"
-        f"Player: {user_message}\nReply in 2-3 short sentences."
-    )
-    try:
-        text = generate(prompt, system=system, max_tokens=140, temperature=0.5).strip()
-    except Exception:
-        text = ""
-    if not text:
-        # Deterministic helpful reply.
-        if "buy" in user_message.lower() or "should i" in user_message.lower():
-            text = f"With cash at ₹{cash:,.0f} and P&L ₹{pnl:,.0f}, I'd wait for a confirmed trend before adding. Check the chart for support levels."
-        elif "sell" in user_message.lower():
-            text = "Selling into strength is a discipline. If your position is >20% of portfolio, trim 10% and rebalance."
-        elif pnl < 0:
-            text = f"You're down ₹{abs(pnl):,.0f}. Don't add to losers. Rotate into bonds or gold until the regime clarifies."
-        else:
-            text = f"Up ₹{pnl:,.0f} — not bad. Lock in some gains into FDs so the win isn't just on paper."
+    if "buy" in user_message.lower() or "should i" in user_message.lower():
+        text = f"With cash at ₹{cash:,.0f} and P&L ₹{pnl:,.0f}, I'd wait for a confirmed trend before adding. Check the chart for support levels."
+    elif "sell" in user_message.lower():
+        text = "Selling into strength is a discipline. If your position is >20% of portfolio, trim 10% and rebalance."
+    elif pnl < 0:
+        text = f"You're down ₹{abs(pnl):,.0f}. Don't add to losers. Rotate into bonds or gold until the regime clarifies."
+    else:
+        text = f"Up ₹{pnl:,.0f} — not bad. Lock in some gains into FDs so the win isn't just on paper."
     return text[:500]
 
 

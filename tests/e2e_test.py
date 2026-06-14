@@ -2,7 +2,6 @@
 
 import os
 import sys
-import types
 
 # Force UTF-8 stdout for ₹ symbol on Windows
 try:
@@ -11,28 +10,6 @@ except Exception:
     pass
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Force mock LLM for tests
-os.environ["MOCK_LLM"] = "1"
-
-# Inject a fake download_model so app.py startup does NOT try to
-# download the 2.84 GB model from the Hub. The MOCK_LLM flag means
-# the model is never loaded into RAM, so the path is irrelevant.
-_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-_FAKE_PATH = os.path.join(os.path.abspath(_MODEL_DIR), "TEST_FAKE_IGNORED.gguf")
-for mod in list(sys.modules):
-    if mod in ("download_model",):
-        del sys.modules[mod]
-fake_dm = types.ModuleType("download_model")
-fake_dm.download = lambda: _FAKE_PATH
-fake_dm.MODEL_REPO = "fake/test"
-fake_dm.MODEL_FILE = "fake.gguf"
-fake_dm.MODEL_DIR = os.path.abspath(_MODEL_DIR)
-sys.modules["download_model"] = fake_dm
-
-import agents
-agents._llm = "mock"
-agents._llm_status = "mock"
 
 from fastapi.testclient import TestClient
 import app as app_module

@@ -20,5 +20,5 @@ def test_parse_news_response():
 
 
 def test_mock_generate():
-    result = agents.mock_generate("agent whale", "")
+    result = agents.generate("agent whale", "")
     assert "agent:" in result
