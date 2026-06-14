@@ -4,6 +4,9 @@ Serves the static frontend and the LLM-backed endpoints (chat, mentor,
 insight). The game itself runs 100% in the browser (see static/engine.js);
 the server holds NO per-user state. This guarantees every browser tab has
 its own independent game.
+
+Inference is handled by Modal GPU when MODAL_INFERENCE_URL is set,
+falling back to local llama-cpp-python otherwise.
 """
 
 import os
@@ -14,21 +17,20 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import agents
-import download_model
 
 app = FastAPI(title="Retro Alpha")
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
-# Ensure the GGUF is on disk, then kick off the model load in a
-# background thread. uvicorn opens the port IMMEDIATELY so HF Spaces'
-# health check passes during the slow cold-start download + compile;
-# /api/health reports the real status throughout.
-try:
-    agents.MODEL_PATH = download_model.download()
-    print(f"Model path: {agents.MODEL_PATH}")
-except Exception as e:
-    print(f"download_model.download() failed: {e}")
+# When using Modal for inference, no local model or llama-cpp-python needed.
+# For local fallback, download the GGUF and load in background thread.
+if not agents.USE_MODAL:
+    try:
+        import download_model
+        agents.MODEL_PATH = download_model.download()
+        print(f"Model path: {agents.MODEL_PATH}")
+    except Exception as e:
+        print(f"download_model.download() failed: {e}")
 
 
 @app.on_event("startup")
@@ -58,6 +60,9 @@ def health() -> JSONResponse:
     }
     if agents.USE_MODAL:
         result["modal_url"] = agents.MODAL_URL
+        result.pop("model_path", None)
+        result.pop("model_exists", None)
+        result.pop("model_size_gb", None)
     return JSONResponse(result)
 
 

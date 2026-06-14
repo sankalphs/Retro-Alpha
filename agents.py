@@ -85,6 +85,11 @@ def _do_load() -> None:
         _llm_status = "loaded"
         _llm_error = ""
         print("LLM loaded successfully.")
+    except ImportError:
+        _llm_error = "llama-cpp-python not installed. Set MODAL_INFERENCE_URL or install llama-cpp-python."
+        print(f"Warning: {_llm_error}")
+        _llm = "mock"
+        _llm_status = "error"
     except Exception as e:
         _llm_error = f"{type(e).__name__}: {e}"
         print(f"Warning: could not load LLM: {_llm_error}. Using mock mode.")
