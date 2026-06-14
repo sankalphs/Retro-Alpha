@@ -488,7 +488,9 @@
           value: state.portfolio[k] * state.prices[k],
         })),
     };
+    const warmId = appendChat("bot", "GPU container warming up... first chat takes a moment.", true);
     const r = await apiLLM("/api/chat", { message: msg, snapshot });
+    if (warmId && warmId.parentNode) warmId.remove();
     if (r && r.reply) {
       const isFallback = r.reply.includes("trouble") || r.reply.length < 20;
       appendChat("bot", r.reply, isFallback);
@@ -503,6 +505,7 @@
     div.textContent = content;
     els.chatLog.appendChild(div);
     els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    return div;
   }
 
   function setStatus(text, isError) {
@@ -543,6 +546,17 @@
       els.chatLlmBadge.className = "badge live";
       els.chatLlmBadge.textContent = "LLM";
       setStatus("Ready (local LLM online)");
+    } else if (status === "modal") {
+      els.llmStatus.textContent = "LLM: CLOUD GPU";
+      els.llmStatus.className = "llm-tag loaded";
+      els.llmStatus.title = h.modal_url
+        ? `Modal: ${h.modal_url} (first chat wakes the GPU container)`
+        : "Modal GPU inference (first chat may take a moment to warm up)";
+      els.llmBadge.className = "badge live";
+      els.llmBadge.textContent = "LLM";
+      els.chatLlmBadge.className = "badge live";
+      els.chatLlmBadge.textContent = "LLM";
+      setStatus("Ready (cloud GPU — first chat wakes the container)");
     } else if (status === "mock") {
       els.llmStatus.textContent = "LLM: MOCK";
       els.llmStatus.className = "llm-tag mock";
@@ -611,7 +625,7 @@
         applyLlmStatus(h);
         _lastStatus = `${h.llm || "?"}|${h.llm_error || ""}`;
       }
-      if (cur === "loaded" || cur === "mock" || cur === "error") {
+      if (cur === "loaded" || cur === "mock" || cur === "error" || cur === "modal") {
         clearInterval(tick);
       }
     }, 3000);

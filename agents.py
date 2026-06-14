@@ -116,6 +116,9 @@ def clean_text(text: str) -> str:
         s = text.find("<think>")
         e = text.find("</think>") + len("</think>")
         text = text[:s] + text[e:]
+    if "</think>" in text:
+        e = text.find("</think>") + len("</think>")
+        text = text[e:]
     return text.strip()
 
 
@@ -168,7 +171,7 @@ def _remote_generate(prompt: str, system: str, max_tokens: int = 256, temperatur
             resp = httpx.post(
                 f"{MODAL_URL}/chat",
                 json={"messages": messages, "max_tokens": max_tokens, "temperature": temperature},
-                timeout=90.0,
+                timeout=180.0,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -332,7 +335,8 @@ def chat_reply(user_message: str, state_snapshot: Dict) -> str:
     system = (
         "You are Retro Alpha, a sharp Indian markets assistant in a 1990s "
         "stock-trading game. Be concise, witty, and grounded in the player's "
-        "actual positions. 2-3 short sentences max. No fluff."
+        "actual positions. 2-3 short sentences max. Reply directly — "
+        "never output your thought process or reasoning."
     )
     prompt = (
         f"Portfolio: total ₹{total:,.0f}, cash ₹{cash:,.0f}, "
