@@ -2,94 +2,101 @@
 Merge LoRA adapter into base model and export to GGUF for llama.cpp inference.
 
 Usage:
-    modal run training.merge_export_gguf
+    modal run -m training.merge_export_gguf
+
+Based on Unsloth's GGUF export guide:
+  https://unsloth.ai/docs/basics/inference-and-deployment/saving-to-gguf
 """
 
 import os
 
 import modal
 
-app = modal.App("retro-alpha-merge-export")
-
 image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git", "build-essential", "cmake")
-    .pip_install(
-        "torch==2.3.0",
-        "transformers==4.41.0",
-        "peft==0.11.0",
-        "huggingface_hub==0.23.0",
-        "gguf",
+    modal.Image.from_registry(
+        "nvidia/cuda:12.6.0-devel-ubuntu22.04",
+        add_python="3.11",
     )
+    .apt_install("git", "build-essential", "curl", "libcurl4-openssl-dev")
+    .pip_install("uv", "huggingface_hub", "hf_transfer")
     .run_commands(
-        "git clone https://github.com/ggerganov/llama.cpp.git /tmp/llama.cpp",
-        "cd /tmp/llama.cpp && cmake -B build . && cmake --build build --config Release -j4",
+        "uv pip install --system --no-cache "
+        "    torch==2.7.1 triton>=3.3.0 "
+        "    transformers==4.56.2 "
+        "    datasets "
+        "    trl "
+        "    peft "
+        "    accelerate "
+        "    bitsandbytes "
+        "    unsloth_zoo "
+        "    'unsloth @ git+https://github.com/unslothai/unsloth'",
+        "uv pip install --system --no-cache --no-build-isolation "
+        "    mamba_ssm==2.2.5 causal_conv1d==1.5.2",
+        "uv pip install --system --no-cache --no-deps 'torchao>=0.16.0'",
     )
 )
 
-secrets = [modal.Secret.from_name("hf-token", required=False)]
+app = modal.App("retro-alpha-merge-export", image=image)
+
+secrets = [modal.Secret.from_name("huggingface-secret")]
 
 
 @app.function(
-    image=image,
-    gpu=modal.gpu.A100(size="40GB"),
-    timeout=60 * 60 * 3,
+    gpu="A100-40GB",
+    timeout=60 * 60 * 4,
     secrets=secrets,
 )
 def merge_and_export(
-    base_model: str = "nvidia/Nemotron-3-Nano-4B-Chat",
-    lora_repo: str = "build-small-hackathon/retro-alpha-nemotron-lora",
-    output_repo: str = "build-small-hackathon/retro-alpha-nemotron-gguf",
-    quantization: str = "Q4_K_M",
+    base_model: str = "unsloth/NVIDIA-Nemotron-3-Nano-4B",
+    lora_repo: str = "sankalphs/retro-alpha-nemotron-lora",
+    output_repo: str = "sankalphs/retro-alpha-nemotron-gguf",
+    quantization: str = "q4_k_m",
 ):
-    import torch
     from huggingface_hub import HfApi, login
-    from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from unsloth import FastLanguageModel
 
     hf_token = os.environ.get("HF_TOKEN")
     if hf_token:
         login(token=hf_token)
 
-    print(f"Loading base model: {base_model}")
-    base = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+    print(f"Loading base model + LoRA: {base_model} + {lora_repo}")
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=lora_repo,
+        max_seq_length=2048,
+        load_in_4bit=False,
+        load_in_8bit=False,
+        full_finetuning=False,
         trust_remote_code=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
-
-    print(f"Loading LoRA adapter: {lora_repo}")
-    model = PeftModel.from_pretrained(base, lora_repo)
-
-    print("Merging adapter into base model...")
-    merged = model.merge_and_unload()
-
-    merged_dir = "/tmp/retro-alpha-merged"
-    print(f"Saving merged model to {merged_dir}")
-    merged.save_pretrained(merged_dir)
-    tokenizer.save_pretrained(merged_dir)
-
-    # Convert to GGUF
-    gguf_dir = "/tmp/retro-alpha-gguf"
-    os.makedirs(gguf_dir, exist_ok=True)
-    gguf_path = f"{gguf_dir}/retro-alpha-nemotron-{quantization.lower()}.gguf"
-
-    convert_script = "/tmp/llama.cpp/convert_hf_to_gguf.py"
-    print(f"Converting to GGUF: {gguf_path}")
-    os.system(
-        f"python {convert_script} {merged_dir} --outfile {gguf_path} --outtype {quantization}"
+        attn_implementation="eager",
     )
 
-    # Push to HF
-    if hf_token:
-        print(f"Pushing GGUF to {output_repo}")
+    # Unsloth merges the LoRA adapter on the fly when loading from a LoRA repo,
+    # but we still call for_inference to ensure inference mode is enabled.
+    FastLanguageModel.for_inference(model)
+
+    print(f"Pushing merged GGUF ({quantization}) to {output_repo}")
+    try:
+        model.push_to_hub_gguf(
+            output_repo,
+            tokenizer,
+            quantization_method=quantization,
+            token=hf_token,
+        )
+    except Exception as e:
+        print(f"Could not push to {output_repo}: {e}")
         api = HfApi(token=hf_token)
-        api.create_repo(repo_id=output_repo, exist_ok=True, repo_type="model")
-        api.upload_file(path_or_fileobj=gguf_path, path_in_repo=f"retro-alpha-nemotron-{quantization.lower()}.gguf", repo_id=output_repo)
+        me = api.whoami()["name"]
+        fallback = f"{me}/retro-alpha-nemotron-gguf"
+        print(f"Trying fallback {fallback}")
+        model.push_to_hub_gguf(
+            fallback,
+            tokenizer,
+            quantization_method=quantization,
+            token=hf_token,
+        )
+        output_repo = fallback
 
-    return f"GGUF exported to {output_repo}/retro-alpha-nemotron-{quantization.lower()}.gguf"
+    return f"GGUF exported to {output_repo} with quantization {quantization}"
 
 
 @app.local_entrypoint()
