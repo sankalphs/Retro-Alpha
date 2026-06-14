@@ -3,6 +3,12 @@
 import os
 import sys
 
+# Force UTF-8 stdout for ₹ symbol on Windows
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Force mock LLM for tests
@@ -84,6 +90,12 @@ r = client.post("/api/chat", json={"message": "should I buy Nifty?", "snapshot":
 check("chat 200", r.status_code == 200)
 data = r.json()
 check("chat has reply", "reply" in data and len(data["reply"]) > 0)
+# Regression: no raw "error: format only" leaks from the mock
+check("chat never returns 'error: format only'",
+      "error: format only" not in data["reply"], f"reply='{data['reply']}'")
+check("chat reply looks like real commentary (has ₹ or words)",
+      ("₹" in data["reply"] or len(data["reply"].split()) >= 4),
+      f"reply='{data['reply']}'")
 
 r = client.post("/api/chat", json={"message": "", "snapshot": {}})
 check("empty message rejected", r.status_code == 400)
@@ -96,6 +108,8 @@ r = client.post("/api/insight", json={
 check("insight 200", r.status_code == 200)
 data = r.json()
 check("insight has text", "insight" in data and len(data["insight"]) > 0)
+check("insight never returns 'error: format only'",
+      "error: format only" not in data["insight"], f"insight='{data['insight']}'")
 
 print("\n=== /api/mentor ===")
 r = client.post("/api/mentor", json={"summary": {

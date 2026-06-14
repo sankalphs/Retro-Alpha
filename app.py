@@ -25,7 +25,7 @@ try:
     agents.MODEL_PATH = download_model.download()
     print(f"Model path set to: {agents.MODEL_PATH}")
 except Exception as e:
-    print(f"Model download failed: {e}. Endpoints will use deterministic fallbacks.")
+    print(f"Model download wrapper failed: {e}. Endpoints will use deterministic fallbacks.")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -39,10 +39,15 @@ async def homepage():
 
 @app.get("/api/health")
 def health() -> JSONResponse:
+    from pathlib import Path as _Path
+    mp = _Path(str(agents.MODEL_PATH))
     return JSONResponse({
         "status": "ok",
         "llm": agents.llm_status(),
+        "llm_error": agents.llm_error(),
         "model_path": str(agents.MODEL_PATH),
+        "model_exists": mp.exists(),
+        "model_size_gb": round(mp.stat().st_size / 1e9, 2) if mp.exists() else 0,
     })
 
 

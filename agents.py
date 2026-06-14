@@ -15,38 +15,55 @@ load_dotenv()
 ASSETS = ["cash", "fd", "gov_bonds", "nifty_50", "nifty_it", "real_estate", "crypto", "gold"]
 PERSONAS = ["whale", "retail", "permabull"]
 
-# Default model path; override via MODEL_PATH env var
-MODEL_PATH = os.getenv("MODEL_PATH", "models/retro-alpha-nemotron-q4_k_m.gguf")
+# Default model path. MUST match the GGUF file in the repo.
+# Override via MODEL_PATH env var if you use a different filename.
+_DEFAULT_MODEL_DIR = Path(__file__).resolve().parent / "models"
+_DEFAULT_MODEL_FILE = "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf"
+MODEL_PATH = os.getenv("MODEL_PATH") or str(_DEFAULT_MODEL_DIR / _DEFAULT_MODEL_FILE)
 
 _llm = None
 _llm_status = "uninitialized"  # "loaded" | "mock" | "error"
+_llm_error = ""                # last load/import error message, surfaced to UI
 
 # Allow forcing mock mode for fast local testing / CI
 if os.getenv("MOCK_LLM") == "1":
     _llm = "mock"
     _llm_status = "mock"
+    _llm_error = "MOCK_LLM=1 (test mode)"
 
 
 def llm_status() -> str:
     return _llm_status
 
 
+def llm_error() -> str:
+    return _llm_error
+
+
 def get_llm():
-    global _llm, _llm_status
+    global _llm, _llm_status, _llm_error
     if _llm is None:
         try:
             from llama_cpp import Llama
-            if not Path(MODEL_PATH).exists():
-                raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
+            mp = Path(MODEL_PATH)
+            if not mp.exists():
+                raise FileNotFoundError(
+                    f"Model file not found at '{mp}'. "
+                    f"Set MODEL_PATH or check the download."
+                )
+            print(f"Loading LLM from {mp} ({mp.stat().st_size / 1e9:.2f} GB)...")
             _llm = Llama(
-                model_path=MODEL_PATH,
-                n_ctx=2048,
+                model_path=str(mp),
+                n_ctx=int(os.getenv("LLAMA_CTX", "2048")),
                 n_threads=int(os.getenv("LLAMA_THREADS", "4")),
                 verbose=False,
             )
             _llm_status = "loaded"
+            _llm_error = ""
+            print("LLM loaded successfully.")
         except Exception as e:
-            print(f"Warning: could not load LLM: {e}. Using mock mode.")
+            _llm_error = f"{type(e).__name__}: {e}"
+            print(f"Warning: could not load LLM: {_llm_error}. Using mock mode.")
             _llm = "mock"
             _llm_status = "error"
     return _llm
@@ -96,8 +113,12 @@ def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: 
 
 
 def mock_generate(prompt: str, system: str = "") -> str:
-    """Deterministic fallback when no model is loaded."""
+    """Deterministic fallback when no model is loaded. Returns canned
+    text for known formats; returns "" for unknown so the per-feature
+    deterministic fallbacks in chat_reply / generate_insight /
+    parse_mentor_response take over (never leak a sentinel)."""
     p = prompt.lower()
+    s = system.lower()
     if "agent" in p and "whale" in p:
         return "agent: whale\naction: buy gov_bonds 0.10\nreason: safety first\nsentiment: cautious"
     if "agent" in p and "retail" in p:
@@ -106,11 +127,13 @@ def mock_generate(prompt: str, system: str = "") -> str:
         return "agent: permabull\naction: buy crypto 0.10\nreason: buy the dip\nsentiment: bullish"
     if "roast" in p or "sharpe_ratio" in p:
         return "roast: diversify more\nsharpe_ratio: 0.5\nlesson: Sharpe ratio measures risk-adjusted return\nsuggestion: add bonds"
-    if "insight" in p or "commentary" in p:
+    if "insight" in p or "commentary" in p or "commentator" in s:
         return "insight: Markets are reacting to the headline. Watch for follow-through."
     if "headline" in p:
         return "headline: RBI holds rates steady\nimpact: cash:0 fd:0 gov_bonds:0 nifty_50:0 nifty_it:0 real_estate:0 crypto:0 gold:0\nduration: 1"
-    return "error: format only"
+    # Chat and other unknown prompts: return empty so the caller's
+    # deterministic fallback runs.
+    return ""
 
 
 def parse_agent_response(response: str, persona: str) -> Dict:

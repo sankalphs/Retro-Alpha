@@ -537,24 +537,39 @@
     if (h.llm === "loaded") {
       els.llmStatus.textContent = "LLM: LOCAL";
       els.llmStatus.className = "llm-tag loaded";
+      els.llmStatus.title = `Model: ${h.model_path}`;
       els.llmBadge.className = "badge live";
       els.llmBadge.textContent = "LLM";
       els.chatLlmBadge.className = "badge live";
       els.chatLlmBadge.textContent = "LLM";
+      setStatus("Ready (local LLM online)");
     } else if (h.llm === "mock") {
       els.llmStatus.textContent = "LLM: MOCK";
       els.llmStatus.className = "llm-tag mock";
+      els.llmStatus.title = h.llm_error || "Mock mode";
       els.llmBadge.className = "badge fallback";
       els.llmBadge.textContent = "FALLBACK";
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
+      setStatus("Ready (LLM in mock mode — features use deterministic fallbacks)");
     } else {
+      // error / uninitialized — LLM failed to load
+      const reason = (h.llm_error || "model not loaded").slice(0, 80);
+      const modelInfo = h.model_exists
+        ? `model found (${h.model_size_gb} GB) but failed to initialize`
+        : `model file missing at ${h.model_path}`;
       els.llmStatus.textContent = "LLM: OFFLINE";
       els.llmStatus.className = "llm-tag error";
+      els.llmStatus.title = `${reason} — ${modelInfo}`;
       els.llmBadge.className = "badge fallback";
+      els.llmBadge.textContent = "FALLBACK";
       els.chatLlmBadge.className = "badge fallback";
+      els.chatLlmBadge.textContent = "FALLBACK";
+      setStatus(
+        `LLM offline (${reason}). Chat/mentor use deterministic fallbacks. Game still works.`,
+        true
+      );
     }
-    setStatus("Ready");
     render();
   })();
 })();
