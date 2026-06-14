@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Retro Alpha — 90s Market Survival</title>
+  <title>Retro Alpha — 90s Market Terminal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -16,110 +16,154 @@
       <div class="scanlines"></div>
       <div class="flicker"></div>
 
-      <header class="terminal-header">
-        <div class="logo glow">RETRO ALPHA v1.0</div>
-        <div class="status-bar">
+      <!-- Top index bar -->
+      <header class="topbar">
+        <div class="brand glow">RETRO ALPHA</div>
+        <div class="indices" id="indices"></div>
+        <div class="topbar-right">
           <span id="date-display">1994-04</span>
           <span class="sep">|</span>
-          <span>MKTCAP: <span id="mktcap-display">₹0</span></span>
+          <span id="llm-status" class="llm-tag">LLM: ...</span>
           <span class="sep">|</span>
-          <span class="online">ONLINE <span class="blink">_</span></span>
+          <span class="online">LOCAL <span class="blink">_</span></span>
         </div>
       </header>
 
-      <div class="ticker-wrap">
-        <div class="ticker" id="ticker">
-          INITIALISING MARKET FEED...  LOADING ASSET PRICES...  CONNECTING TO BSE TERMINAL...
-        </div>
-      </div>
-
-      <main class="terminal-grid">
-        <section class="panel">
-          <h2>Net Worth</h2>
-          <div class="big-number" id="net-worth">₹0</div>
-          <div class="sub-line" id="returns">Return: 0%</div>
-          <div class="sub-line" id="cash-line">Cash: ₹0</div>
-          <div class="sub-line" id="goal-line">Goal: ₹2,000,000 by April 2004</div>
-        </section>
-
-        <section class="panel">
-          <h2>Order Pad</h2>
-          <form id="trade-form" class="trade-form">
-            <label for="asset">Asset</label>
-            <select id="asset" name="asset">
-              <option value="Nifty 50">Nifty 50</option>
-              <option value="Nifty IT">Nifty IT</option>
-              <option value="FD">FD</option>
-              <option value="Gov Bonds">Gov Bonds</option>
-              <option value="Real Estate">Real Estate</option>
-              <option value="Crypto">Crypto</option>
-              <option value="Gold">Gold</option>
-            </select>
-
-            <label for="action">Action</label>
-            <select id="action" name="action">
-              <option value="buy">Buy</option>
-              <option value="sell">Sell</option>
-            </select>
-
-            <label for="amount">%</label>
-            <input type="number" id="amount" name="amount" min="1" max="100" value="10" />
-
-            <button type="submit" class="btn-primary" id="trade-btn">Execute</button>
-          </form>
-        </section>
-
-        <section class="panel chart-panel">
-          <h2>Market Tape</h2>
-          <canvas id="price-chart"></canvas>
-        </section>
-
-        <section class="panel">
-          <h2>Holdings</h2>
-          <table id="holdings-table">
+      <!-- Main grid: left watch | center chart/positions | right order/chat -->
+      <main class="kite-grid">
+        <!-- Left: Market Watch -->
+        <aside class="market-watch panel" id="market-watch">
+          <h2>Market Watch</h2>
+          <table class="watch-table">
             <thead>
-              <tr>
-                <th>Asset</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>Value</th>
-              </tr>
+              <tr><th>Instrument</th><th>LTP</th><th>Chg</th><th>%</th></tr>
             </thead>
-            <tbody></tbody>
+            <tbody id="watch-body"></tbody>
           </table>
-        </section>
+        </aside>
 
-        <section class="panel">
-          <h2>Agent Wire</h2>
-          <div class="agent-log" id="agent-log"></div>
-        </section>
+        <!-- Center: Chart + Positions + News/Agent wire + Insight -->
+        <section class="center-col">
+          <div class="panel chart-panel">
+            <div class="chart-header">
+              <h2 id="chart-title">Net Worth</h2>
+              <div class="chart-controls">
+                <button class="chip active" data-chart="networth">Net Worth</button>
+                <button class="chip" data-chart="nifty_50">Nifty 50</button>
+                <button class="chip" data-chart="nifty_it">Nifty IT</button>
+                <button class="chip" data-chart="gold">Gold</button>
+                <button class="chip" data-chart="crypto">Crypto</button>
+                <button class="chip" data-chart="real_estate">Real Estate</button>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="price-chart"></canvas>
+            </div>
+          </div>
 
-        <section class="panel news-panel">
-          <h2>News Ticker</h2>
-          <div class="news-content" id="news-content">
-            System boot complete. Awaiting first turn...
+          <div class="panel insight-panel" id="insight-panel">
+            <h2>AI Insight <span class="badge" id="llm-badge">LLM</span></h2>
+            <div class="insight-text" id="insight-text">Advance a month to see the AI's read on the market.</div>
+          </div>
+
+          <div class="panel positions-panel">
+            <h2>Positions <span class="muted">(cost basis &amp; P&amp;L)</span></h2>
+            <table class="positions-table">
+              <thead>
+                <tr>
+                  <th>Instrument</th>
+                  <th>Qty</th>
+                  <th>Avg</th>
+                  <th>LTP</th>
+                  <th>Invested</th>
+                  <th>Current</th>
+                  <th>P&amp;L</th>
+                  <th>%</th>
+                </tr>
+              </thead>
+              <tbody id="positions-body">
+                <tr><td colspan="8" class="muted center">No positions yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="panel news-panel">
+            <h2>News &amp; Agent Wire</h2>
+            <div class="news-content" id="news-content">
+              <div class="muted">System boot complete. Awaiting first turn...</div>
+            </div>
+            <div class="agent-log" id="agent-log"></div>
           </div>
         </section>
+
+        <!-- Right: Order pad + Chatbot -->
+        <aside class="right-col">
+          <div class="panel order-panel">
+            <h2>Order Pad</h2>
+            <form id="trade-form" class="trade-form">
+              <label for="asset">Asset</label>
+              <select id="asset" name="asset">
+                <option value="Nifty 50">Nifty 50</option>
+                <option value="Nifty IT">Nifty IT</option>
+                <option value="FD">FD</option>
+                <option value="Gov Bonds">Gov Bonds</option>
+                <option value="Real Estate">Real Estate</option>
+                <option value="Crypto">Crypto</option>
+                <option value="Gold">Gold</option>
+              </select>
+              <label for="action">Side</label>
+              <select id="action" name="action">
+                <option value="buy">BUY</option>
+                <option value="sell">SELL</option>
+              </select>
+              <label for="amount">Qty %</label>
+              <input type="number" id="amount" name="amount" min="1" max="100" value="10" />
+              <button type="submit" class="btn btn-buy" id="trade-btn">EXECUTE</button>
+            </form>
+            <div class="summary">
+              <div class="row"><span>Cash</span><span id="cash-line">₹0</span></div>
+              <div class="row"><span>Net Worth</span><span id="net-worth">₹0</span></div>
+              <div class="row"><span>Invested</span><span id="invested-line">₹0</span></div>
+              <div class="row pnl"><span>Unrealized P&amp;L</span><span id="pnl-line">₹0</span></div>
+              <div class="row"><span>Return</span><span id="return-line">0%</span></div>
+              <div class="row muted"><span>Goal</span><span id="goal-line">₹0 by 2004-04</span></div>
+            </div>
+          </div>
+
+          <div class="panel chat-panel">
+            <h2>Retro AI Chat <span class="badge" id="chat-llm-badge">LLM</span></h2>
+            <div class="chat-log" id="chat-log"></div>
+            <form id="chat-form" class="chat-form">
+              <input type="text" id="chat-input" placeholder="Ask about your portfolio..." autocomplete="off" />
+              <button type="submit" class="btn btn-secondary">SEND</button>
+            </form>
+          </div>
+        </aside>
       </main>
 
-      <footer class="terminal-footer">
-        <button id="advance-btn" class="btn-primary">Advance Month ⏎</button>
-        <button id="mentor-btn" class="btn-secondary">Year-End Review</button>
-        <button id="reset-btn" class="btn-danger">Reset Terminal</button>
+      <!-- Footer -->
+      <footer class="bottombar">
+        <button id="advance-btn" class="btn btn-primary">Advance Month ⏎</button>
+        <button id="mentor-btn" class="btn btn-secondary">Year-End Review</button>
+        <button id="reset-btn" class="btn btn-danger">Reset Terminal</button>
+        <span class="muted" id="status-line">Ready</span>
       </footer>
 
+      <!-- Mentor modal -->
       <div id="mentor-modal" class="mentor-modal hidden">
         <div class="modal-content">
           <h2>Annual Mentor Review</h2>
           <div class="roast" id="mentor-roast"></div>
           <div class="lesson" id="mentor-lesson"></div>
           <div class="suggestion" id="mentor-suggestion"></div>
-          <button id="close-modal" class="btn-primary">ACKNOWLEDGE</button>
+          <button id="close-modal" class="btn btn-primary">ACKNOWLEDGE</button>
         </div>
       </div>
     </div>
   </div>
 
+  <script src="/static/events.js"></script>
+  <script src="/static/engine.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

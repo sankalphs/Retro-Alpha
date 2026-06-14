@@ -42,6 +42,15 @@ class GameState:
     months_elapsed: int = 0
     prices: Dict[str, float] = field(default_factory=lambda: {a: 1.0 for a in ASSETS})
     portfolio: Dict[str, float] = field(default_factory=lambda: {a: 0.0 for a in ASSETS})
+    # Total cash invested in each asset (cost basis for P&L).
+    cost_basis: Dict[str, float] = field(default_factory=lambda: {a: 0.0 for a in ASSETS})
+    # Time-series of total portfolio value for charting.
+    value_history: List[float] = field(default_factory=list)
+    # Time-series of per-asset price (keyed by asset) for the chart selector.
+    # Each entry is {asset_display_name: price} sampled at each advance.
+    price_history: List[Dict[str, float]] = field(default_factory=list)
+    # Last applied event headline (for AI insight context).
+    last_event: Dict = field(default_factory=dict)
     cash_balance: float = 1_000_000.0
     news: Dict = field(default_factory=dict)
     agent_actions: List[Dict] = field(default_factory=list)
@@ -55,10 +64,27 @@ class GameState:
             + sum(float(self.portfolio[a]) * float(self.prices[a]) for a in ASSETS)
         )
 
+    def invested_value(self) -> float:
+        """Total amount currently deployed in risky assets (ex-cash)."""
+        return float(
+            sum(float(self.portfolio[a]) * float(self.prices[a]) for a in ASSETS)
+        )
+
+    def total_pnl(self) -> float:
+        """Unrealized P&L across all holdings (current value - cost basis)."""
+        pnl = 0.0
+        for a in ASSETS:
+            current = float(self.portfolio[a]) * float(self.prices[a])
+            pnl += current - float(self.cost_basis[a])
+        return float(pnl)
+
 
 def new_game(starting_cash: float = 1_000_000.0) -> GameState:
     state = GameState(cash_balance=starting_cash)
     state.portfolio = {a: 0.0 for a in ASSETS}
+    state.cost_basis = {a: 0.0 for a in ASSETS}
+    state.value_history = [float(starting_cash)]
+    state.price_history = []
     return state
 
 
@@ -116,6 +142,8 @@ def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: 
         shares = float(trade_value / price) if price > 0 else 0.0
         state.cash_balance = float(state.cash_balance - trade_value)
         state.portfolio[asset] = float(state.portfolio[asset] + shares)
+        # Cost basis increases by the cash deployed.
+        state.cost_basis[asset] = float(state.cost_basis[asset] + trade_value)
     elif action == "sell":
         price = float(state.prices[asset])
         current_value = float(state.portfolio[asset] * price)
@@ -123,6 +151,12 @@ def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: 
         if sell_value <= 0:
             return
         shares = float(sell_value / price) if price > 0 else 0.0
+        # Reduce cost basis proportionally to shares sold (average-cost method).
+        if state.portfolio[asset] > 0:
+            fraction_sold = shares / state.portfolio[asset]
+            state.cost_basis[asset] = float(
+                max(0.0, state.cost_basis[asset] * (1.0 - fraction_sold))
+            )
         state.portfolio[asset] = float(state.portfolio[asset] - shares)
         state.cash_balance = float(state.cash_balance + sell_value)
 
@@ -136,8 +170,13 @@ def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: 
     })
 
 
-def advance_month(state: GameState, news: Dict, agent_actions: List[Dict]):
-    """Advance the simulation by one month."""
+def advance_month(state: GameState, news: Dict, agent_actions: List[Dict],
+                  event: Dict = None) -> None:
+    """Advance the simulation by one month.
+
+    `news` is a dict (may be empty); `event` is the historical event
+    dict from `events.py` and is the primary driver of price shocks.
+    """
     if state.game_over:
         return
 
@@ -147,14 +186,27 @@ def advance_month(state: GameState, news: Dict, agent_actions: List[Dict]):
         state.month = 1
         state.year += 1
 
-    state.news = news
-    state.agent_actions = agent_actions
+    state.news = news or {}
+    state.agent_actions = agent_actions or []
+    state.last_event = event or {}
 
-    if news.get("impact"):
-        price_shock(state, news["impact"])
+    # Apply the historical event's asset impacts (the primary driver).
+    if event and event.get("impact"):
+        price_shock(state, event["impact"])
 
+    # Apply agent order-flow pressure on top of the event.
     apply_agent_trades(state, agent_actions)
+
+    # Monthly correlated random walk (the baseline drift).
     random_walk(state)
+
+    # Record history for the chart.
+    state.value_history.append(float(state.total_value()))
+    if len(state.value_history) > 240:  # ~20 years of months, plenty
+        state.value_history = state.value_history[-240:]
+    state.price_history.append({a: float(state.prices[a]) for a in ASSETS})
+    if len(state.price_history) > 240:
+        state.price_history = state.price_history[-240:]
 
     if state.months_elapsed >= GAME_LENGTH_MONTHS:
         state.game_over = True
@@ -164,7 +216,7 @@ def advance_month(state: GameState, news: Dict, agent_actions: List[Dict]):
 def year_end_summary(state: GameState) -> Dict:
     """Compute year-end stats for the mentor."""
     year_ledger = [t for t in state.ledger if t["year"] == state.year]
-    values = [float(state.total_value())]  # simplified
+    values = state.value_history[-24:] if state.value_history else [float(state.total_value())]
     returns = (
         (np.diff(values) / values[:-1]).tolist()
         if len(values) > 1
@@ -180,8 +232,12 @@ def year_end_summary(state: GameState) -> Dict:
 
     return {
         "year": int(state.year),
+        "month": int(state.month),
         "starting_value": 1_000_000,
         "ending_value": float(total),
+        "invested_value": float(state.invested_value()),
+        "cash": float(state.cash_balance),
+        "unrealized_pnl": float(state.total_pnl()),
         "max_drawdown": -0.25,  # placeholder
         "sharpe_ratio": float(round(sharpe, 2)),
         "allocations": {k: float(v) for k, v in allocations.items()},
