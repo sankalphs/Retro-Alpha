@@ -1,13 +1,16 @@
 """
-Deterministic agent inference — no LLM dependency.
+Agent inference using Hugging Face Inference API (fallback: deterministic).
 
-All chat, mentor, insight, and NPC agent responses are generated from
-the player's actual portfolio numbers using deterministic rules.
+If HF_TOKEN is set, the hosted model (default google/gemma-2-2b-it) is used
+for chat, mentor, insight, and NPC decisions. If the API is unreachable or
+the token is missing, deterministic rules kick in so the game never breaks.
 """
 
 import json
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -21,8 +24,24 @@ PERSONAS = ["whale", "retail", "permabull"]
 _MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_PATH = os.getenv("MODEL_PATH") or str(_MODEL_DIR / "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf")
 
+_HF_TOKEN = os.getenv("HF_TOKEN", "")
+_HF_MODEL = os.getenv("HF_MODEL", "sankalphs/retro-alpha-nemotron-lora")
+
+_client = None
 _llm_status = "mock"
 _llm_error = ""
+
+if _HF_TOKEN:
+    try:
+        from huggingface_hub import InferenceClient
+        _client = InferenceClient(api_key=_HF_TOKEN)
+        _llm_status = "loading"
+        _llm_error = ""
+        print(f"HF Inference client ready. Model: {_HF_MODEL}")
+    except Exception as e:
+        _llm_status = "mock"
+        _llm_error = f"HF client init: {type(e).__name__}"
+        print(f"Warning: HF Inference client failed: {_llm_error}")
 
 
 def llm_status() -> str:
@@ -33,8 +52,52 @@ def llm_error() -> str:
     return _llm_error
 
 
+def _hf_generate(messages: list, max_tokens: int = 256, temperature: float = 0.7) -> str:
+    if _client is None:
+        return ""
+    try:
+        response = _client.chat_completion(
+            messages=messages,
+            model=_HF_MODEL,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        content = response.choices[0].message.content
+        if isinstance(content, str) and content.strip():
+            return clean_text(content)
+    except Exception as e:
+        global _llm_status, _llm_error
+        print(f"HF API call failed: {type(e).__name__}: {e}")
+        _llm_error = str(e)[:120]
+        if _llm_status == "loading":
+            _llm_status = "error"
+    return ""
+
+
+def _warmup() -> None:
+    """Send a tiny request to wake up the HF Inference endpoint from cold start."""
+    global _llm_status
+    try:
+        result = _hf_generate(
+            [{"role": "user", "content": "Say 'ready'."}],
+            max_tokens=4, temperature=0.0,
+        )
+        if result.strip():
+            _llm_status = "loaded"
+            _llm_error = ""
+            print("HF Inference API warm-up OK — LLM online.")
+        else:
+            raise RuntimeError("empty warm-up response")
+    except Exception:
+        pass
+
+
 def start_background_load() -> None:
-    pass
+    """Kick off an async warm-up call to the HF Inference API."""
+    if _client is None or _llm_status == "loaded":
+        return
+    t = threading.Thread(target=_warmup, name="hf-warmup", daemon=True)
+    t.start()
 
 
 def clean_text(text: str) -> str:
@@ -47,8 +110,22 @@ def clean_text(text: str) -> str:
 
 
 def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: float = 0.7) -> str:
-    """Deterministic generate — returns canned responses for known patterns,
-    empty string for unknown (caller falls back to per-feature deterministic logic)."""
+    """Generate via HF Inference API if available, else deterministic fallback.
+
+    Returns "" on failure so per-feature deterministic fallbacks in callers
+    (chat_reply, generate_insight, parse_mentor_response) take over.
+    """
+    # Try HF API first
+    if _client is not None and _llm_status != "mock":
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        text = _hf_generate(messages, max_tokens=max_tokens, temperature=temperature)
+        if text:
+            return text
+
+    # Deterministic fallback
     p = prompt.lower()
     s = system.lower()
     if "agent" in p and "whale" in p:
@@ -157,15 +234,28 @@ def generate_insight(event: Dict, state_snapshot: Dict) -> str:
     total = float(state_snapshot.get("total_value", 0.0))
     cash_pct = (cash / total * 100.0) if total else 0.0
     regime = str(event.get("regime", "stagnation"))
+    headline = str(event.get("headline", ""))
 
-    if pnl < -50_000:
-        text = f"Cut losers in {regime.replace('_', ' ')} regimes and rotate into defensives."
-    elif pnl > 50_000:
-        text = f"Book partial profits; {regime.replace('_', ' ')} trends rarely last."
-    elif cash_pct > 60:
-        text = "Heavy cash drag. Deploy into bonds or Nifty on dips."
-    else:
-        text = f"Hold the line through this {regime.replace('_', ' ')} phase."
+    system = (
+        "You are a sharp Indian markets commentator. Given a market event "
+        "and a player's portfolio snapshot, output ONE sentence (under 140 chars) "
+        "of actionable insight. No preamble. Start with the verb."
+    )
+    prompt = (
+        f"Event: {headline} (regime: {regime}). "
+        f"Player P&L ₹{pnl:,.0f}, cash {cash_pct:.0f}%, total ₹{total:,.0f}. "
+        f"One actionable sentence."
+    )
+    text = generate(prompt, system=system, max_tokens=80, temperature=0.4).strip()
+    if not text:
+        if pnl < -50_000:
+            text = f"Cut losers in {regime.replace('_', ' ')} regimes and rotate into defensives."
+        elif pnl > 50_000:
+            text = f"Book partial profits; {regime.replace('_', ' ')} trends rarely last."
+        elif cash_pct > 60:
+            text = "Heavy cash drag. Deploy into bonds or Nifty on dips."
+        else:
+            text = f"Hold the line through this {regime.replace('_', ' ')} phase."
     return text[:200]
 
 
@@ -173,15 +263,31 @@ def chat_reply(user_message: str, state_snapshot: Dict) -> str:
     pnl = float(state_snapshot.get("unrealized_pnl", 0.0))
     cash = float(state_snapshot.get("cash", 0.0))
     total = float(state_snapshot.get("total_value", 0.0))
+    positions = state_snapshot.get("positions", [])
+    pos_lines = ", ".join(
+        f"{p['asset']} {p['qty']:.2f} @ ₹{p['price']:.0f}" for p in positions[:8]
+    ) or "no positions"
 
-    if "buy" in user_message.lower() or "should i" in user_message.lower():
-        text = f"With cash at ₹{cash:,.0f} and P&L ₹{pnl:,.0f}, I'd wait for a confirmed trend before adding. Check the chart for support levels."
-    elif "sell" in user_message.lower():
-        text = "Selling into strength is a discipline. If your position is >20% of portfolio, trim 10% and rebalance."
-    elif pnl < 0:
-        text = f"You're down ₹{abs(pnl):,.0f}. Don't add to losers. Rotate into bonds or gold until the regime clarifies."
-    else:
-        text = f"Up ₹{pnl:,.0f} — not bad. Lock in some gains into FDs so the win isn't just on paper."
+    system = (
+        "You are Retro Alpha, a sharp Indian markets assistant in a 1990s "
+        "stock-trading game. Be concise, witty, and grounded in the player's "
+        "actual positions. 2-3 short sentences max. No fluff."
+    )
+    prompt = (
+        f"Portfolio: total ₹{total:,.0f}, cash ₹{cash:,.0f}, "
+        f"unrealized P&L ₹{pnl:,.0f}. Positions: {pos_lines}.\n"
+        f"Player: {user_message}\nReply in 2-3 short sentences."
+    )
+    text = generate(prompt, system=system, max_tokens=140, temperature=0.5).strip()
+    if not text:
+        if "buy" in user_message.lower() or "should i" in user_message.lower():
+            text = f"With cash at ₹{cash:,.0f} and P&L ₹{pnl:,.0f}, I'd wait for a confirmed trend before adding. Check the chart for support levels."
+        elif "sell" in user_message.lower():
+            text = "Selling into strength is a discipline. If your position is >20% of portfolio, trim 10% and rebalance."
+        elif pnl < 0:
+            text = f"You're down ₹{abs(pnl):,.0f}. Don't add to losers. Rotate into bonds or gold until the regime clarifies."
+        else:
+            text = f"Up ₹{pnl:,.0f} — not bad. Lock in some gains into FDs so the win isn't just on paper."
     return text[:500]
 
 
