@@ -25,7 +25,7 @@ _MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_PATH = os.getenv("MODEL_PATH") or str(_MODEL_DIR / "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf")
 
 _HF_TOKEN = os.getenv("HF_TOKEN", "")
-_HF_MODEL = os.getenv("HF_MODEL", "sankalphs/retro-alpha-nemotron-lora")
+_HF_MODEL = os.getenv("HF_MODEL", "microsoft/Phi-3-mini-4k-instruct")
 
 _client = None
 _llm_status = "mock"
@@ -67,8 +67,16 @@ def _hf_generate(messages: list, max_tokens: int = 256, temperature: float = 0.7
             return clean_text(content)
     except Exception as e:
         global _llm_status, _llm_error
-        print(f"HF API call failed: {type(e).__name__}: {e}")
-        _llm_error = str(e)[:120]
+        msg = str(e)
+        # Extract the actual API error message if present
+        try:
+            body = e.response.json() if hasattr(e, 'response') else None
+            if body and isinstance(body, dict):
+                msg = str(body.get("error", body.get("message", msg)))
+        except Exception:
+            pass
+        _llm_error = msg[:200]
+        print(f"HF API call failed: {msg[:200]}")
         if _llm_status == "loading":
             _llm_status = "error"
     return ""
