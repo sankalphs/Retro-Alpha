@@ -1,7 +1,6 @@
-# Runtime dependencies for Retro Alpha Gradio Space
+# Runtime dependencies for Retro Alpha HF Space
 # Use prebuilt CPU wheel to avoid long source compilation in HF Spaces
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-gradio>=5.0.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
 llama-cpp-python>=0.2.20

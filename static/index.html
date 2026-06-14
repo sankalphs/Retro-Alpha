@@ -1,108 +1,126 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Retro Alpha — Agentic Trading Terminal</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Retro Alpha — 90s Market Survival</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-    <div class="crt-frame">
-        <div class="crt-screen">
-            <div class="scanlines"></div>
-            <div class="flicker"></div>
-            <div class="screen-curve"></div>
+  <div class="crt-frame">
+    <div class="crt-screen">
+      <div class="screen-curve"></div>
+      <div class="scanlines"></div>
+      <div class="flicker"></div>
 
-            <header class="terminal-header">
-                <div class="logo">
-                    <span class="blink">[</span> RETRO ALPHA <span class="blink">]</span>
-                </div>
-                <div class="status-bar">
-                    <span id="clock">--:--:--</span>
-                    <span class="sep">|</span>
-                    <span>INR TERMINAL</span>
-                    <span class="sep">|</span>
-                    <span id="connection" class="online">ONLINE</span>
-                </div>
-            </header>
-
-            <div class="ticker-wrap">
-                <div class="ticker" id="ticker">
-                    Loading market data...
-                </div>
-            </div>
-
-            <main class="terminal-grid">
-                <section class="panel news-panel">
-                    <h2>:: BREAKING_NEWS</h2>
-                    <div id="news-display" class="news-content">
-                        Awaiting first broadcast...
-                    </div>
-                </section>
-
-                <section class="panel chart-panel">
-                    <h2>:: PORTFOLIO_VALUE</h2>
-                    <div class="big-number" id="total-value">₹0</div>
-                    <div class="sub-line" id="game-time">YEAR 1 / MONTH 0</div>
-                    <canvas id="chart" width="400" height="180"></canvas>
-                </section>
-
-                <section class="panel holdings-panel">
-                    <h2>:: HOLDINGS</h2>
-                    <table id="holdings-table">
-                        <thead>
-                            <tr><th>ASSET</th><th>PRICE</th><th>QTY</th><th>VALUE</th></tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
-                </section>
-
-                <section class="panel agents-panel">
-                    <h2>:: AGENT_ACTIVITY</h2>
-                    <div id="agent-log" class="agent-log"></div>
-                </section>
-
-                <section class="panel trade-panel">
-                    <h2>:: ORDER_PAD</h2>
-                    <div class="trade-form">
-                        <label>ACTION</label>
-                        <select id="trade-action">
-                            <option value="buy">BUY</option>
-                            <option value="sell">SELL</option>
-                        </select>
-                        <label>ASSET</label>
-                        <select id="trade-asset"></select>
-                        <label>AMOUNT (%)</label>
-                        <input type="number" id="trade-amount" min="1" max="100" value="10">
-                        <button id="btn-trade" class="btn-primary">EXECUTE</button>
-                        <button id="btn-advance" class="btn-secondary">ADVANCE MONTH</button>
-                        <button id="btn-reset" class="btn-danger">RESET</button>
-                    </div>
-                </section>
-            </main>
-
-            <div id="mentor-modal" class="mentor-modal hidden">
-                <div class="modal-content">
-                    <h2>:: YEAR_END_REVIEW</h2>
-                    <div id="mentor-roast" class="roast"></div>
-                    <div id="mentor-lesson" class="lesson"></div>
-                    <div id="mentor-suggestion" class="suggestion"></div>
-                    <button id="btn-close-mentor" class="btn-primary">CONTINUE</button>
-                </div>
-            </div>
-
-            <footer class="terminal-footer">
-                <span>RETRO_ALPHA v0.9.0</span>
-                <span class="sep">|</span>
-                <span>NEMOTRON-3-NANO-4B LOCAL</span>
-                <span class="sep">|</span>
-                <span>BUILT FOR HF BUILD SMALL HACKATHON</span>
-            </footer>
+      <header class="terminal-header">
+        <div class="logo glow">RETRO ALPHA v1.0</div>
+        <div class="status-bar">
+          <span id="date-display">1994-04</span>
+          <span class="sep">|</span>
+          <span>MKTCAP: <span id="mktcap-display">₹0</span></span>
+          <span class="sep">|</span>
+          <span class="online">ONLINE <span class="blink">_</span></span>
         </div>
+      </header>
+
+      <div class="ticker-wrap">
+        <div class="ticker" id="ticker">
+          INITIALISING MARKET FEED...  LOADING ASSET PRICES...  CONNECTING TO BSE TERMINAL...
+        </div>
+      </div>
+
+      <main class="terminal-grid">
+        <section class="panel">
+          <h2>Net Worth</h2>
+          <div class="big-number" id="net-worth">₹0</div>
+          <div class="sub-line" id="returns">Return: 0%</div>
+          <div class="sub-line" id="cash-line">Cash: ₹0</div>
+          <div class="sub-line" id="goal-line">Goal: ₹2,000,000 by April 2004</div>
+        </section>
+
+        <section class="panel">
+          <h2>Order Pad</h2>
+          <form id="trade-form" class="trade-form">
+            <label for="asset">Asset</label>
+            <select id="asset" name="asset">
+              <option value="Cash">Cash</option>
+              <option value="FD">FD</option>
+              <option value="GovBonds">Gov Bonds</option>
+              <option value="Nifty50">Nifty 50</option>
+              <option value="NiftyIT">Nifty IT</option>
+              <option value="RealEstate">Real Estate</option>
+              <option value="Crypto">Crypto</option>
+              <option value="Gold">Gold</option>
+            </select>
+
+            <label for="action">Action</label>
+            <select id="action" name="action">
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+
+            <label for="amount">%</label>
+            <input type="number" id="amount" name="amount" min="1" max="100" value="10" />
+
+            <button type="submit" class="btn-primary" id="trade-btn">Execute</button>
+          </form>
+        </section>
+
+        <section class="panel chart-panel">
+          <h2>Market Tape</h2>
+          <canvas id="price-chart"></canvas>
+        </section>
+
+        <section class="panel">
+          <h2>Holdings</h2>
+          <table id="holdings-table">
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <section class="panel">
+          <h2>Agent Wire</h2>
+          <div class="agent-log" id="agent-log"></div>
+        </section>
+
+        <section class="panel news-panel">
+          <h2>News Ticker</h2>
+          <div class="news-content" id="news-content">
+            System boot complete. Awaiting first turn...
+          </div>
+        </section>
+      </main>
+
+      <footer class="terminal-footer">
+        <button id="advance-btn" class="btn-primary">Advance Month ⏎</button>
+        <button id="mentor-btn" class="btn-secondary">Year-End Review</button>
+        <button id="reset-btn" class="btn-danger">Reset Terminal</button>
+      </footer>
+
+      <div id="mentor-modal" class="mentor-modal hidden">
+        <div class="modal-content">
+          <h2>Annual Mentor Review</h2>
+          <div class="roast" id="mentor-roast"></div>
+          <div class="lesson" id="mentor-lesson"></div>
+          <div class="suggestion" id="mentor-suggestion"></div>
+          <button id="close-modal" class="btn-primary">ACKNOWLEDGE</button>
+        </div>
+      </div>
     </div>
-    <script src="/static/app.js"></script>
+  </div>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>

@@ -1,13 +1,15 @@
 """
-Retro Alpha — Gradio Server backend.
-Serves a custom CRT terminal frontend and exposes game API endpoints.
+Retro Alpha — FastAPI backend with custom CRT terminal frontend.
+Serves static assets and exposes game API endpoints.
 """
 
+import os
 import random
 from pathlib import Path
 
-from fastapi.responses import HTMLResponse
-from gradio import Server
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import agents
 import download_model
@@ -20,9 +22,12 @@ try:
 except Exception as e:
     print(f"Model download failed: {e}. Will use mock mode if no local model exists.")
 
-app = Server()
+app = FastAPI(title="Retro Alpha")
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
+
+# Mount static files so /static/style.css and /static/app.js resolve
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # In-memory game state (single-player)
 _game_state = engine.new_game()
@@ -34,9 +39,9 @@ async def homepage():
         return f.read()
 
 
-@app.api(name="state")
-def get_state() -> dict:
-    return {
+@app.get("/api/state")
+def get_state() -> JSONResponse:
+    return JSONResponse({
         "month": _game_state.month,
         "year": _game_state.year,
         "prices": _game_state.prices,
@@ -47,54 +52,62 @@ def get_state() -> dict:
         "agent_actions": _game_state.agent_actions,
         "game_over": _game_state.game_over,
         "won": _game_state.won,
-    }
+    })
 
 
-@app.api(name="trade")
-def make_trade(asset: str, action: str, amount_pct: float) -> dict:
+@app.post("/api/trade")
+async def make_trade(request: Request) -> JSONResponse:
+    data = await request.json()
+    asset = data.get("asset")
+    action = data.get("action")
+    amount_pct = float(data.get("amount_pct", 0))
+
     if _game_state.game_over:
-        return {"error": "Game over"}
+        return JSONResponse({"error": "Game over"}, status_code=400)
     if asset not in engine.ASSETS:
-        return {"error": "Invalid asset"}
+        return JSONResponse({"error": "Invalid asset"}, status_code=400)
+
     engine.execute_player_trade(_game_state, asset, action, amount_pct)
-    return get_state()
+    return await get_state()
 
 
-@app.api(name="advance")
-def advance_turn() -> dict:
+@app.post("/api/advance")
+def advance_turn() -> JSONResponse:
     if _game_state.game_over:
         return get_state()
 
-    # Generate news
-    regime = random.choice(engine.REGIMES)  # noqa: F821
+    regime = random.choice(engine.REGIMES)
     news = agents.generate_news(regime)
-
-    # Agents decide
-    state_snapshot = get_state()
+    state_snapshot = {
+        "month": _game_state.month,
+        "year": _game_state.year,
+        "prices": _game_state.prices,
+        "portfolio": _game_state.portfolio,
+        "cash": _game_state.cash_balance,
+        "total_value": _game_state.total_value(),
+        "news": _game_state.news,
+        "agent_actions": _game_state.agent_actions,
+    }
     agent_actions = agents.all_agents_decide(state_snapshot)
-
-    # Advance
     engine.advance_month(_game_state, news, agent_actions)
     return get_state()
 
 
-@app.api(name="mentor")
-def get_mentor_review() -> dict:
+@app.get("/api/mentor")
+def get_mentor_review() -> JSONResponse:
     summary = engine.year_end_summary(_game_state)
     review = mentor.generate_review(summary)
-    return {"summary": summary, "review": review}
+    return JSONResponse({"summary": summary, "review": review})
 
 
-@app.api(name="reset")
-def reset_game() -> dict:
+@app.post("/api/reset")
+def reset_game() -> JSONResponse:
     global _game_state
     _game_state = engine.new_game()
     return get_state()
 
 
 if __name__ == "__main__":
-    import os
-
     import uvicorn
     uvicorn.run(
         app,
