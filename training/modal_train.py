@@ -62,10 +62,10 @@ def train(
     lora_alpha: int = 32,
     max_seq_length: int = 1024,
 ):
+    import unsloth  # noqa: F401, must import first per Unsloth warning
     import torch
     from datasets import load_dataset
-    from transformers import TrainingArguments
-    from trl import SFTTrainer
+    from trl import SFTConfig, SFTTrainer
     from unsloth import FastLanguageModel
 
     hf_token = os.environ.get("HF_TOKEN")
@@ -118,7 +118,7 @@ def train(
     dataset = dataset.map(format_messages, batched=True)
 
     output_dir = "/tmp/retro-alpha-lora"
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
         per_device_train_batch_size=per_device_batch_size,
@@ -133,15 +133,15 @@ def train(
         group_by_length=True,
         report_to="none",
         remove_unused_columns=False,
+        dataset_text_field="text",
+        max_seq_length=max_seq_length,
     )
 
     trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         args=training_args,
-        max_seq_length=max_seq_length,
-        dataset_text_field="text",
     )
 
     print("Starting training...")
