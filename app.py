@@ -48,14 +48,17 @@ async def homepage():
 @app.get("/api/health")
 def health() -> JSONResponse:
     mp = Path(agents.MODEL_PATH)
-    return JSONResponse({
+    result = {
         "status": "ok",
         "llm": agents.llm_status(),
         "llm_error": agents.llm_error(),
         "model_path": str(agents.MODEL_PATH),
         "model_exists": mp.exists(),
         "model_size_gb": round(mp.stat().st_size / 1e9, 2) if mp.exists() else 0,
-    })
+    }
+    if agents.USE_MODAL:
+        result["modal_url"] = agents.MODAL_URL
+    return JSONResponse(result)
 
 
 @app.post("/api/chat")

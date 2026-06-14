@@ -1,5 +1,9 @@
 """
-Agent inference using a local llama.cpp GGUF model.
+Agent inference using either a Modal GPU endpoint or a local llama.cpp GGUF model.
+
+If MODAL_INFERENCE_URL is set, all generation goes through the Modal endpoint
+(GPU-accelerated, no local model load). Otherwise falls back to the local
+llama.cpp background-load path for HF Spaces.
 
 Loading is non-blocking: the model is loaded in a background thread
 kicked off by the app's startup event. This lets uvicorn open the port
@@ -7,6 +11,7 @@ immediately (so HF Spaces' health check passes during a slow 2.84 GB
 cold-start download) and surfaces a real "loading" status to the UI.
 
 generate() is therefore non-blocking too:
+  - "modal"   -> call remote Modal endpoint
   - "loaded"  -> call the real LLM
   - "mock"    -> return mock_generate(prompt)
   - otherwise -> return "" so the per-feature deterministic fallbacks
@@ -32,6 +37,9 @@ _DEFAULT_MODEL_DIR = Path(__file__).resolve().parent / "models"
 _DEFAULT_MODEL_FILE = "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf"
 MODEL_PATH = os.getenv("MODEL_PATH") or str(_DEFAULT_MODEL_DIR / _DEFAULT_MODEL_FILE)
 
+MODAL_URL = os.getenv("MODAL_INFERENCE_URL", "").rstrip("/")
+USE_MODAL = bool(MODAL_URL)
+
 _llm = None
 _llm_status = "uninitialized"
 _llm_error = ""
@@ -42,6 +50,10 @@ if os.getenv("MOCK_LLM") == "1":
     _llm = "mock"
     _llm_status = "mock"
     _llm_error = "MOCK_LLM=1 (test mode)"
+
+if USE_MODAL and _llm_status != "mock":
+    _llm_status = "modal"
+    _llm_error = ""
 
 
 def llm_status() -> str:
@@ -82,7 +94,7 @@ def _do_load() -> None:
 
 def start_background_load() -> None:
     global _load_started, _llm_status
-    if _llm_status == "mock":
+    if _llm_status in ("mock", "modal"):
         return
     with _load_lock:
         if _load_started:
@@ -105,6 +117,8 @@ def clean_text(text: str) -> str:
 def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: float = 0.7) -> str:
     if _llm_status == "mock":
         return mock_generate(prompt, system)
+    if USE_MODAL:
+        return _remote_generate(prompt, system, max_tokens, temperature)
     if _llm_status != "loaded":
         return ""
     llm = _llm
@@ -127,6 +141,40 @@ def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: 
         if isinstance(content, str) and content.strip():
             return clean_text(content)
     print("Warning: LLM returned empty content after retries.")
+    return ""
+
+
+def _remote_generate(prompt: str, system: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
+    import time
+
+    try:
+        import httpx
+    except ImportError:
+        print("httpx not installed. Install it for Modal inference: pip install httpx")
+        return ""
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    for attempt in range(2):
+        try:
+            resp = httpx.post(
+                f"{MODAL_URL}/chat",
+                json={"messages": messages, "max_tokens": max_tokens, "temperature": temperature},
+                timeout=90.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            if isinstance(content, str) and content.strip():
+                return clean_text(content)
+        except Exception as e:
+            print(f"Modal inference attempt {attempt + 1} failed: {e}")
+            if attempt == 0:
+                time.sleep(2)
+    print("Warning: Modal inference returned empty content after retries.")
     return ""
 
 
