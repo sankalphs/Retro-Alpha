@@ -8,8 +8,8 @@ from huggingface_hub import hf_hub_download
 
 load_dotenv()
 
-MODEL_REPO = os.getenv("MODEL_REPO", "build-small-hackathon/retro-alpha-nemotron-gguf")
-MODEL_FILE = os.getenv("MODEL_FILE", "retro-alpha-nemotron-q4_k_m.gguf")
+MODEL_REPO = os.getenv("MODEL_REPO", "sankalphs/retro-alpha-nemotron-gguf")
+MODEL_FILE = os.getenv("MODEL_FILE", "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf")
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 
 
