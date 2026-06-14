@@ -50,7 +50,10 @@ class GameState:
     won: bool = False
 
     def total_value(self) -> float:
-        return self.cash_balance + sum(self.portfolio[a] * self.prices[a] for a in ASSETS)
+        return float(
+            self.cash_balance
+            + sum(float(self.portfolio[a]) * float(self.prices[a]) for a in ASSETS)
+        )
 
 
 def new_game(starting_cash: float = 1_000_000.0) -> GameState:
@@ -65,7 +68,7 @@ def price_shock(state: GameState, impact: Dict[str, float]):
         if asset == "cash":
             continue
         if asset in impact:
-            state.prices[asset] *= (1 + impact[asset])
+            state.prices[asset] = float(state.prices[asset] * (1 + float(impact[asset])))
 
 
 def random_walk(state: GameState):
@@ -78,8 +81,8 @@ def random_walk(state: GameState):
         params = ASSET_PARAMS[asset]
         monthly_mean = params["mean"] / 12
         monthly_vol = params["vol"] / np.sqrt(12)
-        ret = monthly_mean + monthly_vol * shocks[i]
-        state.prices[asset] *= (1 + ret)
+        ret = float(monthly_mean + monthly_vol * shocks[i])
+        state.prices[asset] = float(state.prices[asset] * (1 + ret))
 
 
 def apply_agent_trades(state: GameState, agent_actions: List[Dict]):
@@ -90,11 +93,11 @@ def apply_agent_trades(state: GameState, agent_actions: List[Dict]):
             asset = item.get("asset", "cash")
             if asset not in pressure:
                 continue
-            amt = item.get("amount_pct", 0.0) * (1 if item.get("action") == "buy" else -1)
+            amt = float(item.get("amount_pct", 0.0)) * (1 if item.get("action") == "buy" else -1)
             pressure[asset] += amt
     for asset in ASSETS:
         # Agent flow moves price by up to 3%
-        state.prices[asset] *= (1 + pressure[asset] * 0.03)
+        state.prices[asset] = float(state.prices[asset] * (1 + pressure[asset] * 0.03))
 
 
 def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: float):
@@ -102,32 +105,34 @@ def execute_player_trade(state: GameState, asset: str, action: str, amount_pct: 
     if asset not in state.prices:
         raise ValueError(f"Unknown asset: {asset}")
 
-    total = state.total_value()
-    trade_value = total * amount_pct
+    total = float(state.total_value())
+    trade_value = float(total * amount_pct)
 
     if action == "buy":
-        trade_value = min(trade_value, state.cash_balance)
+        trade_value = float(min(trade_value, state.cash_balance))
         if trade_value <= 0:
             return
-        shares = trade_value / state.prices[asset]
-        state.cash_balance -= trade_value
-        state.portfolio[asset] += shares
+        price = float(state.prices[asset])
+        shares = float(trade_value / price) if price > 0 else 0.0
+        state.cash_balance = float(state.cash_balance - trade_value)
+        state.portfolio[asset] = float(state.portfolio[asset] + shares)
     elif action == "sell":
-        current_value = state.portfolio[asset] * state.prices[asset]
-        sell_value = min(trade_value, current_value)
+        price = float(state.prices[asset])
+        current_value = float(state.portfolio[asset] * price)
+        sell_value = float(min(trade_value, current_value))
         if sell_value <= 0:
             return
-        shares = sell_value / state.prices[asset]
-        state.portfolio[asset] -= shares
-        state.cash_balance += sell_value
+        shares = float(sell_value / price) if price > 0 else 0.0
+        state.portfolio[asset] = float(state.portfolio[asset] - shares)
+        state.cash_balance = float(state.cash_balance + sell_value)
 
     state.ledger.append({
         "month": state.month,
         "year": state.year,
         "asset": asset,
         "action": action,
-        "amount_pct": amount_pct,
-        "value": trade_value,
+        "amount_pct": float(amount_pct),
+        "value": float(trade_value),
     })
 
 
@@ -159,23 +164,27 @@ def advance_month(state: GameState, news: Dict, agent_actions: List[Dict]):
 def year_end_summary(state: GameState) -> Dict:
     """Compute year-end stats for the mentor."""
     year_ledger = [t for t in state.ledger if t["year"] == state.year]
-    values = [state.total_value()]  # simplified
-    returns = np.diff(values) / values[:-1] if len(values) > 1 else [0.0]
-    sharpe = (np.mean(returns) / (np.std(returns) + 1e-9)) * np.sqrt(12)
+    values = [float(state.total_value())]  # simplified
+    returns = (
+        (np.diff(values) / values[:-1]).tolist()
+        if len(values) > 1
+        else [0.0]
+    )
+    sharpe = float((np.mean(returns) / (np.std(returns) + 1e-9)) * np.sqrt(12))
 
-    total = state.total_value()
+    total = float(state.total_value())
     allocations = {}
     for asset in ASSETS:
-        val = state.portfolio[asset] * state.prices[asset]
+        val = float(state.portfolio[asset]) * float(state.prices[asset])
         allocations[asset] = round(val / total, 3) if total > 0 else 0.0
 
     return {
-        "year": state.year,
+        "year": int(state.year),
         "starting_value": 1_000_000,
-        "ending_value": total,
+        "ending_value": float(total),
         "max_drawdown": -0.25,  # placeholder
-        "sharpe_ratio": round(sharpe, 2),
-        "allocations": allocations,
+        "sharpe_ratio": float(round(sharpe, 2)),
+        "allocations": {k: float(v) for k, v in allocations.items()},
         "ledger": year_ledger,
     }
 

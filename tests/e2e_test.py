@@ -110,6 +110,42 @@ if s["agent_actions"]:
     ], f"got asset={a.get('asset')}")
 check("news has headline", s["news"] and s["news"].get("headline"), f"news={s['news']}")
 
+print("\n=== Regression: response values are native Python floats (no numpy) ===")
+for asset, val in s["prices"].items():
+    check(f"price[{asset}] is float", type(val) is float, f"got {type(val).__name__}")
+check("total_value is float", type(s["total_value"]) is float, f"got {type(s['total_value']).__name__}")
+check("cash is float", type(s["cash"]) is float, f"got {type(s['cash']).__name__}")
+
+print("\n=== Regression: forced LLM failure returns 200, not 500 ===")
+client.post("/api/reset")
+import agents as _agents
+_orig_generate_news = _agents.generate_news
+def _boom(*a, **kw):
+    raise RuntimeError("simulated LLM crash")
+_agents.generate_news = _boom
+try:
+    r = client.post("/api/advance")
+    check("advance survives LLM crash with 200", r.status_code == 200, f"got {r.status_code}")
+    s2 = r.json()
+    check("months_elapsed still incremented", s2["months_elapsed"] == 1)
+    check("prices still all float", all(type(v) is float for v in s2["prices"].values()))
+finally:
+    _agents.generate_news = _orig_generate_news
+
+# Mentor crash resilience
+def _boom_mentor(*a, **kw):
+    raise RuntimeError("mentor crash")
+_orig_mentor = app_module.mentor.generate_review
+app_module.mentor.generate_review = _boom_mentor
+try:
+    r = client.get("/api/mentor")
+    check("mentor survives crash with 200", r.status_code == 200, f"got {r.status_code}")
+    data = r.json()
+    check("mentor returns review dict", "review" in data and "roast" in data["review"])
+finally:
+    app_module.mentor.generate_review = _orig_mentor
+client.post("/api/reset")
+
 print("\n=== Multi-month advance ===")
 client.post("/api/reset")
 for i in range(12):

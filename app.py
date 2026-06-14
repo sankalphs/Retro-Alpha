@@ -52,30 +52,30 @@ def _flatten_agent_action(raw: Dict) -> Dict:
                 "reason": "", "sentiment": ""}
     first = (raw.get("actions") or [{}])[0]
     return {
-        "agent": raw.get("agent", ""),
-        "action": first.get("action", "hold"),
-        "asset": ASSET_DISPLAY.get(first.get("asset", ""), first.get("asset", "")),
-        "amount_pct": first.get("amount_pct", 0.0),
-        "reason": first.get("reason", ""),
-        "sentiment": raw.get("sentiment", ""),
+        "agent": str(raw.get("agent", "")),
+        "action": str(first.get("action", "hold")),
+        "asset": ASSET_DISPLAY.get(str(first.get("asset", "")), str(first.get("asset", ""))),
+        "amount_pct": float(first.get("amount_pct", 0.0)),
+        "reason": str(first.get("reason", "")),
+        "sentiment": str(raw.get("sentiment", "")),
     }
 
 
 def _translate_state(s: engine.GameState) -> Dict:
     return {
-        "month": s.month,
-        "year": s.year,
-        "months_elapsed": s.months_elapsed,
-        "goal_year": engine.STARTING_YEAR + engine.GAME_LENGTH_MONTHS // 12,
-        "goal_value": engine.WIN_THRESHOLD,
-        "prices": {ASSET_DISPLAY[k]: v for k, v in s.prices.items()},
-        "portfolio": {ASSET_DISPLAY[k]: v for k, v in s.portfolio.items()},
-        "cash": s.cash_balance,
-        "total_value": s.total_value(),
-        "news": s.news,
-        "agent_actions": [_flatten_agent_action(a) for a in s.agent_actions],
-        "game_over": s.game_over,
-        "won": s.won,
+        "month": int(s.month),
+        "year": int(s.year),
+        "months_elapsed": int(s.months_elapsed),
+        "goal_year": int(engine.STARTING_YEAR + engine.GAME_LENGTH_MONTHS // 12),
+        "goal_value": float(engine.WIN_THRESHOLD),
+        "prices": {ASSET_DISPLAY[k]: float(v) for k, v in s.prices.items()},
+        "portfolio": {ASSET_DISPLAY[k]: float(v) for k, v in s.portfolio.items()},
+        "cash": float(s.cash_balance),
+        "total_value": float(s.total_value()),
+        "news": s.news or {},
+        "agent_actions": [_flatten_agent_action(a) for a in (s.agent_actions or [])],
+        "game_over": bool(s.game_over),
+        "won": bool(s.won),
     }
 
 
@@ -122,27 +122,45 @@ def advance_turn() -> JSONResponse:
     if _game_state.game_over:
         return JSONResponse(_translate_state(_game_state))
 
-    regime = random.choice(engine.REGIMES)
-    news = agents.generate_news(regime)
-    state_snapshot = {
-        "month": _game_state.month,
-        "year": _game_state.year,
-        "prices": _game_state.prices,
-        "portfolio": _game_state.portfolio,
-        "cash": _game_state.cash_balance,
-        "total_value": _game_state.total_value(),
-        "news": _game_state.news,
-        "agent_actions": _game_state.agent_actions,
-    }
-    agent_actions = agents.all_agents_decide(state_snapshot)
-    engine.advance_month(_game_state, news, agent_actions)
+    try:
+        regime = random.choice(engine.REGIMES)
+        news = agents.generate_news(regime)
+        state_snapshot = {
+            "month": _game_state.month,
+            "year": _game_state.year,
+            "prices": {k: float(v) for k, v in _game_state.prices.items()},
+            "portfolio": {k: float(v) for k, v in _game_state.portfolio.items()},
+            "cash": float(_game_state.cash_balance),
+            "total_value": float(_game_state.total_value()),
+            "news": _game_state.news,
+            "agent_actions": _game_state.agent_actions,
+        }
+        agent_actions = agents.all_agents_decide(state_snapshot)
+        engine.advance_month(_game_state, news, agent_actions)
+    except Exception as e:
+        print(f"Error in advance_turn: {e}")
+        # Still advance the month so the game is not stuck
+        engine.advance_month(_game_state, {}, [])
     return JSONResponse(_translate_state(_game_state))
 
 
 @app.get("/api/mentor")
 def get_mentor_review() -> JSONResponse:
-    summary = engine.year_end_summary(_game_state)
-    review = mentor.generate_review(summary)
+    try:
+        summary = engine.year_end_summary(_game_state)
+        review = mentor.generate_review(summary)
+    except Exception as e:
+        print(f"Error in get_mentor_review: {e}")
+        summary = {"year": int(_game_state.year), "starting_value": 1_000_000,
+                   "ending_value": float(_game_state.total_value()),
+                   "max_drawdown": -0.25, "sharpe_ratio": 0.0,
+                   "allocations": {}, "ledger": []}
+        review = {
+            "roast": "Markets are noisy; so is my parser.",
+            "sharpe_ratio": 0.0,
+            "lesson": "Sharpe ratio measures risk-adjusted return.",
+            "suggestion": "Diversify across asset classes.",
+        }
     return JSONResponse({"summary": summary, "review": review})
 
 
