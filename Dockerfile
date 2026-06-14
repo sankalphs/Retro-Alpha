@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements and install Python deps (prefer prebuilt llama-cpp-python wheel)
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
+RUN pip install --no-cache-dir --no-binary llama-cpp-python -r requirements.txt
 
 # Copy application code
 COPY . .
