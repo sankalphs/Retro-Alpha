@@ -532,9 +532,9 @@
   window.addEventListener("resize", renderChart);
 
   // --- boot ---
-  (async function boot() {
-    const h = await fetchHealth();
-    if (h.llm === "loaded") {
+  function applyLlmStatus(h) {
+    const status = h.llm || "uninitialized";
+    if (status === "loaded") {
       els.llmStatus.textContent = "LLM: LOCAL";
       els.llmStatus.className = "llm-tag loaded";
       els.llmStatus.title = `Model: ${h.model_path}`;
@@ -543,7 +543,7 @@
       els.chatLlmBadge.className = "badge live";
       els.chatLlmBadge.textContent = "LLM";
       setStatus("Ready (local LLM online)");
-    } else if (h.llm === "mock") {
+    } else if (status === "mock") {
       els.llmStatus.textContent = "LLM: MOCK";
       els.llmStatus.className = "llm-tag mock";
       els.llmStatus.title = h.llm_error || "Mock mode";
@@ -552,9 +552,20 @@
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
       setStatus("Ready (LLM in mock mode — features use deterministic fallbacks)");
+    } else if (status === "loading" || status === "uninitialized") {
+      els.llmStatus.textContent = "LLM: LOADING…";
+      els.llmStatus.className = "llm-tag loading";
+      els.llmStatus.title = h.llm_error
+        ? `Loading model — ${h.llm_error}`
+        : `Loading model from ${h.model_path}…`;
+      els.llmBadge.className = "badge fallback";
+      els.llmBadge.textContent = "FALLBACK";
+      els.chatLlmBadge.className = "badge fallback";
+      els.chatLlmBadge.textContent = "FALLBACK";
+      setStatus("Loading local LLM in the background… (game works either way)");
     } else {
-      // error / uninitialized — LLM failed to load
-      const reason = (h.llm_error || "model not loaded").slice(0, 80);
+      // error
+      const reason = (h.llm_error || "model not loaded").slice(0, 120);
       const modelInfo = h.model_exists
         ? `model found (${h.model_size_gb} GB) but failed to initialize`
         : `model file missing at ${h.model_path}`;
@@ -570,6 +581,39 @@
         true
       );
     }
+  }
+
+  let _lastStatus = null;
+  async function pollLlm() {
+    try {
+      const h = await fetchHealth();
+      const key = `${h.llm || "?"}|${h.llm_error || ""}`;
+      if (key !== _lastStatus) {
+        _lastStatus = key;
+        applyLlmStatus(h);
+      }
+    } catch (e) {
+      /* network blip; ignore */
+    }
+  }
+
+  (async function boot() {
+    await pollLlm();
     render();
+    // Poll every 3s so the UI tracks the background load in real time
+    // (uninitialized -> loading -> loaded/error). Stop polling once we
+    // reach a terminal state (loaded, mock, or error).
+    const tick = setInterval(async () => {
+      const h = await (await fetch("/api/health").catch(() => null))?.json().catch(() => null);
+      if (!h) return;
+      const cur = h.llm || "?";
+      if (cur !== _lastStatus.split("|")[0]) {
+        applyLlmStatus(h);
+        _lastStatus = `${h.llm || "?"}|${h.llm_error || ""}`;
+      }
+      if (cur === "loaded" || cur === "mock" || cur === "error") {
+        clearInterval(tick);
+      }
+    }, 3000);
   })();
 })();

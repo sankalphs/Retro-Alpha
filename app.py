@@ -20,19 +20,21 @@ app = FastAPI(title="Retro Alpha")
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
-# Ensure the GGUF is on disk, then eagerly load it into RAM so
-# /api/health reflects the REAL status (not "uninitialized") as soon
-# as the container is up. Lazy-loading would race the first health
-# check and surface a generic "model not loaded" with no error reason.
+# Ensure the GGUF is on disk, then kick off the model load in a
+# background thread. uvicorn opens the port IMMEDIATELY so HF Spaces'
+# health check passes during the slow 2.84 GB cold-start download;
+# /api/health reports the real status (uninitialized -> loading ->
+# loaded/error) throughout.
 try:
     agents.MODEL_PATH = download_model.download()
     print(f"Model path: {agents.MODEL_PATH}")
-    print("Eagerly loading LLM into memory (this may take ~10-60s)...")
-    _ = agents.get_llm()  # triggers Llama(...) load; sets status + error
-    err = agents.llm_error()
-    print(f"LLM status: {agents.llm_status()} ({err or 'ok'})")
 except Exception as e:
-    print(f"Startup LLM init failed: {e}")
+    print(f"download_model.download() failed: {e}")
+
+
+@app.on_event("startup")
+def _on_startup():
+    agents.start_background_load()
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

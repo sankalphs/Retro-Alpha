@@ -1,10 +1,24 @@
 """
 Agent inference using a local llama.cpp GGUF model.
+
+Loading is non-blocking: the model is loaded in a background thread
+kicked off by the app's startup event. This lets uvicorn open the port
+immediately (so HF Spaces' health check passes during a slow 2.84 GB
+cold-start download) and surfaces a real "loading" status to the UI
+instead of the generic "model not loaded" race condition.
+
+generate() is therefore non-blocking too:
+  - "loaded"  -> call the real LLM
+  - "mock"    -> return mock_generate(prompt)
+  - otherwise -> return "" so the per-feature deterministic fallbacks
+                 in chat_reply / generate_insight / parse_mentor_response
+                 take over
 """
 
 import json
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Dict, List
 
@@ -22,10 +36,12 @@ _DEFAULT_MODEL_FILE = "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf"
 MODEL_PATH = os.getenv("MODEL_PATH") or str(_DEFAULT_MODEL_DIR / _DEFAULT_MODEL_FILE)
 
 _llm = None
-_llm_status = "uninitialized"  # "loaded" | "mock" | "error"
-_llm_error = ""                # last load/import error message, surfaced to UI
+_llm_status = "uninitialized"   # "uninitialized" | "loading" | "loaded" | "error" | "mock"
+_llm_error = ""                 # last load/import error, surfaced to UI
+_load_started = False
+_load_lock = threading.Lock()
 
-# Allow forcing mock mode for fast local testing / CI
+# Force-mock shortcut (set BEFORE import in tests / CI)
 if os.getenv("MOCK_LLM") == "1":
     _llm = "mock"
     _llm_status = "mock"
@@ -40,32 +56,54 @@ def llm_error() -> str:
     return _llm_error
 
 
-def get_llm():
+def _do_load() -> None:
+    """Background worker that actually loads the GGUF into RAM."""
     global _llm, _llm_status, _llm_error
-    if _llm is None:
-        try:
-            from llama_cpp import Llama
-            mp = Path(MODEL_PATH)
-            if not mp.exists():
-                raise FileNotFoundError(
-                    f"Model file not found at '{mp}'. "
-                    f"Set MODEL_PATH or check the download."
-                )
-            print(f"Loading LLM from {mp} ({mp.stat().st_size / 1e9:.2f} GB)...")
-            _llm = Llama(
-                model_path=str(mp),
-                n_ctx=int(os.getenv("LLAMA_CTX", "2048")),
-                n_threads=int(os.getenv("LLAMA_THREADS", "4")),
-                verbose=False,
+    try:
+        from llama_cpp import Llama
+        mp = Path(MODEL_PATH)
+        if not mp.exists():
+            raise FileNotFoundError(
+                f"Model file not found at '{mp}'. "
+                f"Set MODEL_PATH or check the download."
             )
-            _llm_status = "loaded"
-            _llm_error = ""
-            print("LLM loaded successfully.")
-        except Exception as e:
-            _llm_error = f"{type(e).__name__}: {e}"
-            print(f"Warning: could not load LLM: {_llm_error}. Using mock mode.")
-            _llm = "mock"
-            _llm_status = "error"
+        size_gb = mp.stat().st_size / 1e9
+        print(f"Loading LLM from {mp} ({size_gb:.2f} GB)...")
+        _llm = Llama(
+            model_path=str(mp),
+            n_ctx=int(os.getenv("LLAMA_CTX", "2048")),
+            n_threads=int(os.getenv("LLAMA_THREADS", "4")),
+            verbose=False,
+        )
+        _llm_status = "loaded"
+        _llm_error = ""
+        print("LLM loaded successfully.")
+    except Exception as e:
+        _llm_error = f"{type(e).__name__}: {e}"
+        print(f"Warning: could not load LLM: {_llm_error}. Using mock mode.")
+        _llm = "mock"
+        _llm_status = "error"
+
+
+def start_background_load() -> None:
+    """Kick off the model load in a daemon thread. Idempotent and a
+    no-op in MOCK_LLM mode. Safe to call from a FastAPI startup event."""
+    global _load_started, _llm_status
+    if _llm_status == "mock":
+        return
+    with _load_lock:
+        if _load_started:
+            return
+        _load_started = True
+        _llm_status = "loading"
+    t = threading.Thread(target=_do_load, name="llm-loader", daemon=True)
+    t.start()
+
+
+def get_llm():
+    """Return the loaded LLM object. Kept for back-compat with any
+    caller that still uses it; new code should check llm_status() and
+    use generate() (non-blocking) instead."""
     return _llm
 
 
@@ -79,16 +117,25 @@ def clean_text(text: str) -> str:
 
 
 def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: float = 0.7) -> str:
-    llm = get_llm()
-    if llm == "mock":
+    """Non-blocking LLM call.
+
+    - "mock"    -> return mock_generate(prompt)
+    - "loaded"  -> call the real LLM (with a low-temp retry if empty)
+    - anything else (loading / uninitialized / error) -> return ""
+      so the caller's deterministic fallback runs.
+    """
+    if _llm_status == "mock":
         return mock_generate(prompt, system)
 
+    if _llm_status != "loaded":
+        return ""
+
+    llm = _llm
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    # Try once, then retry with a lower temperature if empty.
     for attempt, (mt, temp) in enumerate([(max_tokens, temperature), (max_tokens, 0.2)]):
         try:
             response = llm.create_chat_completion(

@@ -108,9 +108,10 @@ html, body {
   padding: 1px 8px; border: 1px solid var(--phosphor-dim); border-radius: 10px;
   color: var(--phosphor-dim); font-size: 0.75rem;
 }
-.llm-tag.loaded { color: var(--green); border-color: var(--green); }
-.llm-tag.mock   { color: var(--amber); border-color: var(--amber); }
-.llm-tag.error  { color: var(--red);   border-color: var(--red); }
+.llm-tag.loaded  { color: var(--green); border-color: var(--green); }
+.llm-tag.mock    { color: var(--amber); border-color: var(--amber); }
+.llm-tag.error   { color: var(--red);   border-color: var(--red); }
+.llm-tag.loading { color: var(--cyan);  border-color: var(--cyan); animation: pulse 1.2s infinite; }
 .sep { color: var(--phosphor-dim); }
 .online { color: var(--phosphor); }
 .online .blink { color: var(--phosphor); }
