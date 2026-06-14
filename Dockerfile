@@ -12,6 +12,7 @@ WORKDIR /app
 #   - cmake, build-essential     : safety net so pip can build llama-cpp-python
 #                                 from source if the prebuilt wheel is ever
 #                                 unavailable for this Python version
+# Cache bust: 2026-06-14-v2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
