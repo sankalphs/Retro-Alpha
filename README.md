@@ -20,7 +20,18 @@ tags:
 
 Built for the [🤗 Build Small Hackathon](https://huggingface.co/build-small-hackathon).
 
-👉 **[Play the game on HF Spaces](https://huggingface.co/spaces/build-small-hackathon/retro)**
+---
+
+## 🔗 Links
+
+| | |
+|---|---|
+| 🎮 **Play (main)** | [build-small-hackathon/retro](https://huggingface.co/spaces/build-small-hackathon/retro) |
+| 🎮 **Play (alpha)** | [sankalphs/retro-alpha](https://huggingface.co/spaces/sankalphs/retro-alpha) |
+| 📝 **Build Blog** | [sankalphs.blogspot.com/2026/06/retro-alpha.html](https://sankalphs.blogspot.com/2026/06/retro-alpha.html) |
+| 🐙 **GitHub** | [github.com/sankalphs/retro](https://github.com/sankalphs/retro) |
+| ▶️ **Video Demo** | [youtu.be/OLJDXhos0Iw](https://youtu.be/OLJDXhos0Iw) |
+| 🐦 **Social Post** | [x.com/sankalphs/status/2066602928350359694](https://x.com/sankalphs/status/2066602928350359694) |
 
 ---
 
