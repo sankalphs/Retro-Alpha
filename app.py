@@ -1,72 +1,62 @@
 """
-Retro Alpha — FastAPI backend.
-Serves the static frontend and the LLM-backed endpoints (chat, mentor,
-insight). The game itself runs 100% in the browser (see static/engine.js);
-the server holds NO per-user state. This guarantees every browser tab has
-its own independent game.
+Retro Alpha - 90s Indian Stock Market Survival Game
+Gradio app for HuggingFace Spaces (Build Small Hackathon).
 
-Inference is handled by Modal GPU when MODAL_INFERENCE_URL is set,
-falling back to local llama-cpp-python otherwise.
+Game engine runs 100% in the browser.
+Server handles LLM-backed features: chat, mentor, insight.
+No per-user state; every browser tab is independent.
 """
 
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+import gradio as gr
+from fastapi import Request
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 import agents
+import mentor as _mentor
 
-app = FastAPI(title="Retro Alpha")
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
-# When using Modal for inference, no local model or llama-cpp-python needed.
-# For local fallback, download the GGUF and load in background thread.
-if not agents.USE_MODAL:
-    try:
-        import download_model
-        agents.MODEL_PATH = download_model.download()
-        print(f"Model path: {agents.MODEL_PATH}")
-    except Exception as e:
-        print(f"download_model.download() failed: {e}")
 
-
-@app.on_event("startup")
-def _on_startup():
-    agents.start_background_load()
-
-
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-@app.get("/", response_class=HTMLResponse)
-async def homepage():
+def get_full_html():
     with open(STATIC_DIR / "index.html", "r", encoding="utf-8") as f:
         return f.read()
 
 
-@app.get("/api/health")
+with gr.Blocks(
+    title="Retro Alpha",
+    fill_width=True,
+    fill_height=True,
+    css="""
+    .gradio-container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+    .contain { padding: 0 !important; max-width: none !important; }
+    .main { padding: 0 !important; }
+    footer { display: none !important; }
+    #retro-root { width: 100vw; height: 100vh; overflow: hidden; }
+    #retro-root iframe { width: 100%; height: 100%; border: none; }
+    """,
+) as demo:
+    full_html = get_full_html()
+    gr.HTML(full_html, elem_id="retro-root")
+
+app = demo.app
+app.mount("/game", StaticFiles(directory=str(STATIC_DIR)), name="game_static")
+
+
+@app.get("/game-api/health")
 def health() -> JSONResponse:
-    mp = Path(agents.MODEL_PATH)
-    result = {
+    return JSONResponse({
         "status": "ok",
         "llm": agents.llm_status(),
         "llm_error": agents.llm_error(),
-        "model_path": str(agents.MODEL_PATH),
-        "model_exists": mp.exists(),
-        "model_size_gb": round(mp.stat().st_size / 1e9, 2) if mp.exists() else 0,
-    }
-    if agents.USE_MODAL:
-        result["modal_url"] = agents.MODAL_URL
-        result.pop("model_path", None)
-        result.pop("model_exists", None)
-        result.pop("model_size_gb", None)
-    return JSONResponse(result)
+    })
 
 
-@app.post("/api/chat")
+@app.post("/game-api/chat")
 async def chat(request: Request) -> JSONResponse:
     data = await request.json()
     user_message = str(data.get("message", "")).strip()
@@ -81,7 +71,7 @@ async def chat(request: Request) -> JSONResponse:
     return JSONResponse({"reply": reply})
 
 
-@app.post("/api/insight")
+@app.post("/game-api/insight")
 async def insight(request: Request) -> JSONResponse:
     data = await request.json()
     event = data.get("event") or {}
@@ -94,11 +84,10 @@ async def insight(request: Request) -> JSONResponse:
     return JSONResponse({"insight": text})
 
 
-@app.post("/api/mentor")
+@app.post("/game-api/mentor")
 async def mentor_review(request: Request) -> JSONResponse:
     data = await request.json()
     summary = data.get("summary") or {}
-    import mentor as _mentor
     try:
         review = _mentor.generate_review(summary)
     except Exception as e:
@@ -112,6 +101,15 @@ async def mentor_review(request: Request) -> JSONResponse:
     return JSONResponse({"review": review})
 
 
+def launch():
+    agents.start_background_load()
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=int(os.environ.get("PORT", "7860")),
+        favicon_path=None,
+        show_error=True,
+    )
+
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "7860")))
+    launch()

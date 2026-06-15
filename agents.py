@@ -1,29 +1,17 @@
 """
-Agent inference using either a Modal GPU endpoint or a local llama.cpp GGUF model.
+Agent inference using Modal GPU endpoint, HuggingFace Inference API, or mock mode.
 
-If MODAL_INFERENCE_URL is set, all generation goes through the Modal endpoint
-(GPU-accelerated, no local model load). Otherwise falls back to the local
-llama.cpp background-load path for HF Spaces.
+No llama.cpp dependency. Inference is handled by:
+  - "modal"  -> remote Modal GPU endpoint (if MODAL_INFERENCE_URL set)
+  - "hf"     -> HuggingFace Inference API (if HF_API_URL + HF_TOKEN set)
+  - "mock"   -> deterministic test mode (MOCK_LLM=1 or fallback)
 
-Loading is non-blocking: the model is loaded in a background thread
-kicked off by the app's startup event. This lets uvicorn open the port
-immediately (so HF Spaces' health check passes during a slow 2.84 GB
-cold-start download) and surfaces a real "loading" status to the UI.
-
-generate() is therefore non-blocking too:
-  - "modal"   -> call remote Modal endpoint
-  - "loaded"  -> call the real LLM
-  - "mock"    -> return mock_generate(prompt)
-  - otherwise -> return "" so the per-feature deterministic fallbacks
-                 in chat_reply / generate_insight / parse_mentor_response
-                 take over
+All features have deterministic fallbacks so the app works without any LLM.
 """
 
 import json
 import os
 import re
-import threading
-from pathlib import Path
 from typing import Dict, List
 
 from dotenv import load_dotenv
@@ -33,27 +21,28 @@ load_dotenv()
 ASSETS = ["cash", "fd", "gov_bonds", "nifty_50", "nifty_it", "real_estate", "crypto", "gold"]
 PERSONAS = ["whale", "retail", "permabull"]
 
-_DEFAULT_MODEL_DIR = Path(__file__).resolve().parent / "models"
-_DEFAULT_MODEL_FILE = "NVIDIA-Nemotron-3-Nano-4B.Q4_K_M.gguf"
-MODEL_PATH = os.getenv("MODEL_PATH") or str(_DEFAULT_MODEL_DIR / _DEFAULT_MODEL_FILE)
-
 MODAL_URL = os.getenv("MODAL_INFERENCE_URL", "").rstrip("/")
 USE_MODAL = bool(MODAL_URL)
 
-_llm = None
+HF_API_URL = os.getenv("HF_API_URL", "").rstrip("/")
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+USE_HF = bool(HF_API_URL) and bool(HF_TOKEN)
+
 _llm_status = "uninitialized"
 _llm_error = ""
-_load_started = False
-_load_lock = threading.Lock()
 
 if os.getenv("MOCK_LLM") == "1":
-    _llm = "mock"
     _llm_status = "mock"
     _llm_error = "MOCK_LLM=1 (test mode)"
-
-if USE_MODAL and _llm_status != "mock":
+elif USE_MODAL:
     _llm_status = "modal"
     _llm_error = ""
+elif USE_HF:
+    _llm_status = "hf"
+    _llm_error = ""
+else:
+    _llm_status = "mock"
+    _llm_error = "No inference backend configured (set MODAL_INFERENCE_URL or HF_API_URL+HF_TOKEN, or MOCK_LLM=1)"
 
 
 def llm_status() -> str:
@@ -64,50 +53,8 @@ def llm_error() -> str:
     return _llm_error
 
 
-def _do_load() -> None:
-    global _llm, _llm_status, _llm_error
-    try:
-        from llama_cpp import Llama
-        mp = Path(MODEL_PATH)
-        if not mp.exists():
-            raise FileNotFoundError(
-                f"Model file not found at '{mp}'. "
-                f"Set MODEL_PATH or check the download."
-            )
-        size_gb = mp.stat().st_size / 1e9
-        print(f"Loading LLM from {mp} ({size_gb:.2f} GB)...")
-        _llm = Llama(
-            model_path=str(mp),
-            n_ctx=int(os.getenv("LLAMA_CTX", "2048")),
-            n_threads=int(os.getenv("LLAMA_THREADS", "4")),
-            verbose=False,
-        )
-        _llm_status = "loaded"
-        _llm_error = ""
-        print("LLM loaded successfully.")
-    except ImportError:
-        _llm_error = "llama-cpp-python not installed. Set MODAL_INFERENCE_URL or install llama-cpp-python."
-        print(f"Warning: {_llm_error}")
-        _llm = "mock"
-        _llm_status = "error"
-    except Exception as e:
-        _llm_error = f"{type(e).__name__}: {e}"
-        print(f"Warning: could not load LLM: {_llm_error}. Using mock mode.")
-        _llm = "mock"
-        _llm_status = "error"
-
-
 def start_background_load() -> None:
-    global _load_started, _llm_status
-    if _llm_status in ("mock", "modal"):
-        return
-    with _load_lock:
-        if _load_started:
-            return
-        _load_started = True
-        _llm_status = "loading"
-    t = threading.Thread(target=_do_load, name="llm-loader", daemon=True)
-    t.start()
+    pass
 
 
 def clean_text(text: str) -> str:
@@ -126,39 +73,19 @@ def generate(prompt: str, system: str = "", max_tokens: int = 256, temperature: 
     if _llm_status == "mock":
         return mock_generate(prompt, system)
     if USE_MODAL:
-        return _remote_generate(prompt, system, max_tokens, temperature)
-    if _llm_status != "loaded":
-        return ""
-    llm = _llm
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    for attempt, (mt, temp) in enumerate([(max_tokens, temperature), (max_tokens, 0.2)]):
-        try:
-            response = llm.create_chat_completion(
-                messages=messages, max_tokens=mt, temperature=temp,
-            )
-        except Exception as e:
-            print(f"Warning: LLM call failed (attempt {attempt}): {e}.")
-            continue
-        try:
-            content = response["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            continue
-        if isinstance(content, str) and content.strip():
-            return clean_text(content)
-    print("Warning: LLM returned empty content after retries.")
+        return _modal_generate(prompt, system, max_tokens, temperature)
+    if USE_HF:
+        return _hf_generate(prompt, system, max_tokens, temperature)
     return ""
 
 
-def _remote_generate(prompt: str, system: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
+def _modal_generate(prompt: str, system: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
     import time
 
     try:
         import httpx
     except ImportError:
-        print("httpx not installed. Install it for Modal inference: pip install httpx")
+        print("httpx not installed. Install it: pip install httpx")
         return ""
 
     messages = []
@@ -183,6 +110,43 @@ def _remote_generate(prompt: str, system: str, max_tokens: int = 256, temperatur
             if attempt == 0:
                 time.sleep(2)
     print("Warning: Modal inference returned empty content after retries.")
+    return ""
+
+
+def _hf_generate(prompt: str, system: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
+    try:
+        import httpx
+    except ImportError:
+        print("httpx not installed. Install it: pip install httpx")
+        return ""
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        resp = httpx.post(
+            HF_API_URL,
+            json={
+                "inputs": messages,
+                "parameters": {"max_new_tokens": max_tokens, "temperature": temperature},
+            },
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list) and data and "generated_text" in data[0]:
+            content = data[0]["generated_text"]
+            if isinstance(content, str) and content.strip():
+                return clean_text(content)
+        if isinstance(data, dict) and "generated_text" in data:
+            content = data["generated_text"]
+            if isinstance(content, str) and content.strip():
+                return clean_text(content)
+    except Exception as e:
+        print(f"HF inference failed: {e}")
     return ""
 
 

@@ -1,21 +1,20 @@
-// Retro Alpha — Browser-local frontend.
-// Game state lives in the browser (see engine.js). Server is called only
-// for LLM-backed features: chat, mentor, insight.
+// Retro Alpha - Frontend with improved UX
+// NN/g heuristics: system status visibility, recognition > recall,
+// error prevention, user control & freedom, minimalist design
 
 (function () {
   const E = window.RetroEngine;
   const Ev = window.RetroEvents;
   const DISPLAY = E.ASSET_DISPLAY_NAMES;
-  const TRADABLE_DISPLAY = E.TRADABLE_KEYS.map((k) => DISPLAY[k]);
+  const TRADABLE_DISPLAY = E.TRADABLE_KEYS.map(function (k) { return DISPLAY[k]; });
 
-  // --- DOM refs ---
-  const $ = (id) => document.getElementById(id);
-  const els = {
+  // DOM refs
+  function $(id) { return document.getElementById(id); }
+  var els = {
     date: $("date-display"),
     llmStatus: $("llm-status"),
     llmBadge: $("llm-badge"),
     chatLlmBadge: $("chat-llm-badge"),
-    indices: $("indices"),
     watchBody: $("watch-body"),
     insightText: $("insight-text"),
     positionsBody: $("positions-body"),
@@ -27,10 +26,13 @@
     netWorth: $("net-worth"),
     investedLine: $("invested-line"),
     pnlLine: $("pnl-line"),
-    returnLine: $("return-line"),
-    goalLine: $("goal-line"),
     tradeForm: $("trade-form"),
     tradeBtn: $("trade-btn"),
+    sideBuy: $("side-buy"),
+    sideSell: $("side-sell"),
+    actionInput: $("action"),
+    amountRange: $("amount-range"),
+    amountInput: $("amount"),
     advanceBtn: $("advance-btn"),
     mentorBtn: $("mentor-btn"),
     resetBtn: $("reset-btn"),
@@ -43,26 +45,47 @@
     chatLog: $("chat-log"),
     chatForm: $("chat-form"),
     chatInput: $("chat-input"),
+    progressBar: $("progress-bar"),
+    progressLabel: $("progress-label"),
+    goalPct: $("goal-pct"),
+    onboarding: $("onboarding-overlay"),
+    onboardStart: $("onboard-start"),
+    helpBtn: $("help-btn"),
+    helpModal: $("help-modal"),
+    closeHelp: $("close-help"),
+    toastContainer: $("toast-container"),
   };
 
-  // --- local state ---
-  let state = E.newGame();
-  let chartMode = "networth";
-  let prevPrices = { ...state.prices };
-  let chatHistory = []; // [{role, content, fallback}]
+  // State
+  var state = E.newGame();
+  var chartMode = "networth";
+  var prevPrices = {};
+  for (var k in state.prices) prevPrices[k] = state.prices[k];
 
-  // --- formatters ---
-  const fmtMoney = (n) => {
-    const sign = n < 0 ? "-" : "";
-    return sign + "₹" + Math.abs(Math.round(n)).toLocaleString("en-IN");
+  // Formatters
+  var fmtMoney = function (n) {
+    var neg = n < 0 ? "-" : "";
+    return neg + "\u20b9" + Math.abs(Math.round(n)).toLocaleString("en-IN");
   };
-  const fmtPct = (n) => (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
-  const chgClass = (n) => (n > 0 ? "up" : n < 0 ? "down" : "flat");
+  var fmtPct = function (n) { return (n >= 0 ? "+" : "") + n.toFixed(2) + "%"; };
+  var chgClass = function (n) { return n > 0.001 ? "up" : n < -0.001 ? "down" : "flat"; };
 
-  // --- API (LLM only) ---
+  // Toast notifications
+  function toast(msg, type) {
+    type = type || "info";
+    var div = document.createElement("div");
+    div.className = "toast " + type;
+    div.textContent = msg;
+    els.toastContainer.appendChild(div);
+    setTimeout(function () {
+      if (div.parentNode) div.parentNode.removeChild(div);
+    }, 3000);
+  }
+
+  // API (LLM only)
   async function apiLLM(path, body) {
     try {
-      const r = await fetch(path, {
+      var r = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -77,92 +100,104 @@
 
   async function fetchHealth() {
     try {
-      const r = await fetch("/api/health");
+      var r = await fetch("/game-api/health");
       return await r.json();
     } catch (e) {
       return { llm: "error" };
     }
   }
 
-  // --- rendering ---
+  // --- Rendering ---
   function render() {
-    const s = state;
-    const total = E.totalValue(s);
-    const invested = E.investedValue(s);
-    const pnl = E.totalPnl(s);
-    const startVal = E.STARTING_CASH;
-    const ret = ((total - startVal) / startVal) * 100;
+    var s = state;
+    var total = E.totalValue(s);
+    var invested = E.investedValue(s);
+    var pnl = E.totalPnl(s);
+    var startVal = E.STARTING_CASH;
+    var goalPct = (total / E.WIN_THRESHOLD) * 100;
 
-    els.date.textContent = `${s.year}-${String(s.month).padStart(2, "0")}`;
+    // Date & progress
+    els.date.textContent = s.year + "-" + String(s.month).padStart(2, "0");
+    var monthsDone = s.months_elapsed;
+    var pct = (monthsDone / E.GAME_LENGTH_MONTHS) * 100;
+    els.progressBar.style.width = pct + "%";
+    els.progressBar.className = "progress-bar" +
+      (pct > 80 ? " danger" : pct > 60 ? " warning" : "");
+    els.progressLabel.textContent = "Month " + monthsDone + "/" + E.GAME_LENGTH_MONTHS;
+    els.goalPct.textContent = Math.round(goalPct) + "%";
+    els.goalPct.className = goalPct >= 100 ? "goal-pct up" : "goal-pct";
+
+    // Summary
     els.cashLine.textContent = fmtMoney(s.cash_balance);
     els.netWorth.textContent = fmtMoney(total);
     els.investedLine.textContent = fmtMoney(invested);
     els.pnlLine.textContent = fmtMoney(pnl);
     els.pnlLine.className = pnl >= 0 ? "up" : "down";
-    els.returnLine.textContent = fmtPct(ret);
-    els.returnLine.className = chgClass(ret);
-    els.goalLine.textContent = `₹${(E.WIN_THRESHOLD/1e5).toFixed(0)}L by ${E.STARTING_YEAR + Math.floor(E.GAME_LENGTH_MONTHS/12)}-04`;
 
-    renderIndices();
     renderWatch();
     renderPositions();
     renderChart();
+    renderTradeBtn();
 
+    // Game over
     if (s.game_over) {
       els.advanceBtn.disabled = true;
       els.tradeBtn.disabled = true;
-      els.statusLine.textContent = s.won
-        ? "CONGRATULATIONS — You survived the markets."
-        : "GAME OVER — Margin call.";
+      if (s.won) {
+        setStatus("YOU WIN! \u20b920L reached.");
+        showGameOverBanner(true);
+      } else {
+        setStatus("GAME OVER - 10 years elapsed.");
+        showGameOverBanner(false);
+      }
     }
   }
 
-  function renderIndices() {
-    const s = state;
-    const top = [
-      { name: "NIFTY", price: s.prices.nifty_50, prev: prevPrices.nifty_50 },
-      { name: "NIFTYIT", price: s.prices.nifty_it, prev: prevPrices.nifty_it },
-      { name: "GOLD", price: s.prices.gold, prev: prevPrices.gold },
-      { name: "RE", price: s.prices.real_estate, prev: prevPrices.real_estate },
-      { name: "CRYPTO", price: s.prices.crypto, prev: prevPrices.crypto },
-    ];
-    els.indices.innerHTML = top.map((i) => {
-      const chg = (i.price - i.prev) / Math.max(i.prev, 1e-9) * 100;
-      const cls = chg >= 0 ? "up" : "down";
-      return `<span class="idx"><span class="name">${i.name}</span><span class="val">${fmtMoney(i.price*1000)}</span><span class="chg ${cls}">${fmtPct(chg)}</span></span>`;
-    }).join("");
+  function renderTradeBtn() {
+    var action = els.actionInput.value;
+    els.tradeBtn.textContent = action === "buy" ? "BUY \u25b2" : "SELL \u25bc";
+    els.tradeBtn.className = action === "buy" ? "btn btn-buy" : "btn btn-sell";
+  }
+
+  function showGameOverBanner(won) {
+    var existing = document.querySelector(".game-over-banner");
+    if (existing) existing.remove();
+    var banner = document.createElement("div");
+    banner.className = "game-over-banner " + (won ? "win" : "lose");
+    banner.textContent = won
+      ? "CONGRATULATIONS! You doubled your money. You beat the market."
+      : "GAME OVER. 10 years passed. Reset to try again.";
+    var summary = els.tradeForm.parentNode.querySelector(".summary");
+    if (summary) summary.insertAdjacentElement("afterend", banner);
   }
 
   function renderWatch() {
-    const s = state;
-    const rows = E.TRADABLE_KEYS.map((key) => {
-      const display = DISPLAY[key];
-      const price = s.prices[key];
-      const prev = prevPrices[key] ?? price;
-      const chg = (price - prev) / Math.max(prev, 1e-9) * 100;
-      const absChg = price - prev;
-      const cls = chgClass(chg);
-      const active = chartMode === key ? "active" : "";
-      return `<tr class="${active}" data-asset="${key}">
-        <td>${display}</td>
-        <td>${fmtMoney(price)}</td>
-        <td class="${cls}">${absChg >= 0 ? "+" : ""}${absChg.toFixed(3)}</td>
-        <td class="${cls}">${fmtPct(chg)}</td>
-      </tr>`;
+    var s = state;
+    var rows = E.TRADABLE_KEYS.map(function (key) {
+      var display = DISPLAY[key];
+      var price = s.prices[key];
+      var prev = prevPrices[key] !== undefined ? prevPrices[key] : price;
+      var chg = (price - prev) / Math.max(prev, 1e-9) * 100;
+      var absChg = price - prev;
+      var cls = chgClass(chg);
+      var active = chartMode === key ? " active" : "";
+      return "<tr class=\"" + active + "\" data-asset=\"" + key + "\">" +
+        "<td>" + display + "</td>" +
+        "<td>" + fmtMoney(price) + "</td>" +
+        "<td class=\"" + cls + "\">" + (absChg >= 0 ? "+" : "") + absChg.toFixed(3) + "</td>" +
+        "<td class=\"" + cls + "\">" + fmtPct(chg) + "</td>" +
+      "</tr>";
     }).join("");
     els.watchBody.innerHTML = rows;
-    els.watchBody.querySelectorAll("tr").forEach((tr) => {
-      tr.addEventListener("click", () => {
-        const asset = tr.dataset.asset;
+    els.watchBody.querySelectorAll("tr").forEach(function (tr) {
+      tr.addEventListener("click", function () {
+        var asset = tr.dataset.asset;
         chartMode = asset;
         els.chartTitle.textContent = DISPLAY[asset];
-        document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
-        const chip = document.querySelector(`.chip[data-chart="${asset}"]`);
+        document.querySelectorAll(".chip").forEach(function (c) { c.classList.remove("active"); });
+        var chip = document.querySelector('.chip[data-chart="' + asset + '"]');
         if (chip) chip.classList.add("active");
         else document.querySelector('.chip[data-chart="networth"]').classList.add("active");
-        if (chartMode !== "networth") {
-          els.chartTitle.textContent = DISPLAY[asset];
-        }
         renderWatch();
         renderChart();
       });
@@ -170,216 +205,243 @@
   }
 
   function renderPositions() {
-    const s = state;
-    const rows = [];
-    for (const asset of E.TRADABLE_KEYS) {
-      const qty = s.portfolio[asset];
-      if (qty <= 0) continue;
-      const price = s.prices[asset];
-      const basis = s.cost_basis[asset];
-      const current = qty * price;
-      const pnl = current - basis;
-      const pnlPct = basis > 0 ? (pnl / basis) * 100 : 0;
-      const pnlCls = pnl >= 0 ? "pnl-pos" : "pnl-neg";
-      rows.push(`<tr>
-        <td>${DISPLAY[asset]}</td>
-        <td>${qty.toFixed(4)}</td>
-        <td>${fmtMoney(basis/qty)}</td>
-        <td>${fmtMoney(price)}</td>
-        <td>${fmtMoney(basis)}</td>
-        <td>${fmtMoney(current)}</td>
-        <td class="${pnlCls}">${fmtMoney(pnl)}</td>
-        <td class="${pnlCls}">${fmtPct(pnlPct)}</td>
-      </tr>`);
+    var s = state;
+    var rows = [];
+    for (var i = 0; i < E.TRADABLE_KEYS.length; i++) {
+      var asset = E.TRADABLE_KEYS[i];
+      var qty = s.portfolio[asset];
+      if (qty <= 0.0001) continue;
+      var price = s.prices[asset];
+      var basis = s.cost_basis[asset];
+      var current = qty * price;
+      var pnl = current - basis;
+      var pnlPct = basis > 0 ? (pnl / basis) * 100 : 0;
+      var pnlCls = pnl >= 0 ? "pnl-pos" : "pnl-neg";
+      rows.push("<tr>" +
+        "<td>" + DISPLAY[asset] + "</td>" +
+        "<td>" + qty.toFixed(4) + "</td>" +
+        "<td>" + (basis > 0 ? fmtMoney(basis / qty) : "-") + "</td>" +
+        "<td>" + fmtMoney(price) + "</td>" +
+        "<td>" + fmtMoney(current) + "</td>" +
+        "<td class=\"" + pnlCls + "\">" + fmtMoney(pnl) + " (" + fmtPct(pnlPct) + ")</td>" +
+      "</tr>");
     }
     if (rows.length === 0) {
-      els.positionsBody.innerHTML = `<tr><td colspan="8" class="muted center">No positions yet.</td></tr>`;
+      els.positionsBody.innerHTML = '<tr><td colspan="6" class="muted center">Buy assets to see them here</td></tr>';
     } else {
       els.positionsBody.innerHTML = rows.join("");
     }
   }
 
-  // --- chart (with axis labels) ---
+  // Chart
   function renderChart() {
-    const canvas = els.chart;
-    const dpr = window.devicePixelRatio || 1;
-    const cssW = canvas.clientWidth;
-    const cssH = canvas.clientHeight;
+    var canvas = els.chart;
+    var dpr = window.devicePixelRatio || 1;
+    var cssW = canvas.clientWidth;
+    var cssH = canvas.clientHeight;
+    if (cssW <= 0 || cssH <= 0) return;
     canvas.width = cssW * dpr;
     canvas.height = cssH * dpr;
-    const ctx = canvas.getContext("2d");
+    var ctx = canvas.getContext("2d");
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    const padL = 50, padR = 12, padT = 10, padB = 22;
-    const plotW = cssW - padL - padR;
-    const plotH = cssH - padT - padB;
+    var padL = 48, padR = 10, padT = 8, padB = 20;
+    var plotW = cssW - padL - padR;
+    var plotH = cssH - padT - padB;
+    if (plotW <= 0 || plotH <= 0) return;
 
-    let series;
+    var series;
     if (chartMode === "networth") {
       series = state.value_history;
     } else {
-      series = (state.price_history || []).map((snap) => snap[chartMode] || 0);
+      series = (state.price_history || []).map(function (snap) { return snap[chartMode] || 0; });
     }
-    if (series.length < 2) return;
+    if (!series || series.length < 2) {
+      ctx.fillStyle = "rgba(51,255,51,0.3)";
+      ctx.font = '12px "Share Tech Mono", monospace';
+      ctx.textAlign = "center";
+      ctx.fillText("Advance a month to build chart data", cssW / 2, cssH / 2);
+      return;
+    }
 
-    const min = Math.min(...series);
-    const max = Math.max(...series);
-    const range = (max - min) || 1;
-    const yLo = min - range * 0.05;
-    const yHi = max + range * 0.05;
-    const yRange = yHi - yLo;
-
-    const xStep = plotW / Math.max(series.length - 1, 1);
+    var min = Infinity, max = -Infinity;
+    for (var i = 0; i < series.length; i++) {
+      if (series[i] < min) min = series[i];
+      if (series[i] > max) max = series[i];
+    }
+    var range = (max - min) || 1;
+    var yLo = min - range * 0.05;
+    var yHi = max + range * 0.05;
+    var yRange = yHi - yLo;
+    var xStep = plotW / Math.max(series.length - 1, 1);
 
     // Grid
-    ctx.strokeStyle = "rgba(51,255,51,0.08)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(51,255,51,0.06)";
+    ctx.lineWidth = 0.5;
     ctx.font = '10px "Share Tech Mono", monospace';
-    ctx.fillStyle = "rgba(51,255,51,0.4)";
-    for (let i = 0; i <= 4; i++) {
-      const y = padT + (plotH / 4) * i;
+    ctx.fillStyle = "rgba(51,255,51,0.35)";
+    for (var j = 0; j <= 4; j++) {
+      var gy = padT + (plotH / 4) * j;
       ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(cssW - padR, y);
+      ctx.moveTo(padL, gy);
+      ctx.lineTo(cssW - padR, gy);
       ctx.stroke();
-      const val = yHi - (yRange / 4) * i;
-      const label = chartMode === "networth"
-        ? fmtMoney(val).replace("₹", "")
+      var val = yHi - (yRange / 4) * j;
+      var label = chartMode === "networth"
+        ? fmtMoney(val).replace("\u20b9", "")
         : val.toFixed(3);
       ctx.textAlign = "right";
-      ctx.fillText(label, padL - 4, y + 3);
+      ctx.fillText(label, padL - 4, gy + 3);
     }
 
-    // X-axis labels (months)
-    const totalMonths = series.length;
-    const labelEvery = Math.max(Math.floor(totalMonths / 6), 1);
+    // X labels
+    var totalMonths = series.length;
+    var labelEvery = Math.max(Math.floor(totalMonths / 6), 1);
     ctx.textAlign = "center";
-    for (let i = 0; i < totalMonths; i += labelEvery) {
-      const x = padL + i * xStep;
-      const mIdx = state.months_elapsed - (totalMonths - 1 - i);
-      const yStart = E.STARTING_YEAR;
-      const absMonth = mIdx + E.STARTING_MONTH - 1;
-      const yr = yStart + Math.floor(absMonth / 12);
-      const mo = (absMonth % 12) + 1;
-      ctx.fillText(`${String(mo).padStart(2,"0")}/${yr%100}`, x, cssH - 4);
+    for (var k = 0; k < totalMonths; k += labelEvery) {
+      var lx = padL + k * xStep;
+      var mIdx = state.months_elapsed - (totalMonths - 1 - k);
+      var yStart = E.STARTING_YEAR;
+      var absMonth = mIdx + E.STARTING_MONTH - 1;
+      var yr = yStart + Math.floor(absMonth / 12);
+      var mo = (absMonth % 12) + 1;
+      ctx.fillText(String(mo).padStart(2, "0") + "/" + (yr % 100), lx, cssH - 4);
     }
 
     // Line
-    ctx.strokeStyle = chartMode === "networth" ? "#33ff33" : "#00e5ff";
+    var lineColor = chartMode === "networth" ? "#33ff33" : "#00e5ff";
+    ctx.strokeStyle = lineColor;
     ctx.lineWidth = 2;
-    ctx.shadowColor = ctx.strokeStyle;
+    ctx.shadowColor = lineColor;
     ctx.shadowBlur = 6;
     ctx.beginPath();
-    series.forEach((v, i) => {
-      const x = padL + i * xStep;
-      const y = padT + plotH - ((v - yLo) / yRange) * plotH;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
+    for (var m = 0; m < series.length; m++) {
+      var sx = padL + m * xStep;
+      var sy = padT + plotH - ((series[m] - yLo) / yRange) * plotH;
+      if (m === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Last-point dot
-    const last = series[series.length - 1];
-    const lx = padL + (series.length - 1) * xStep;
-    const ly = padT + plotH - ((last - yLo) / yRange) * plotH;
-    ctx.fillStyle = ctx.strokeStyle;
+    // Last dot
+    var last = series[series.length - 1];
+    var lastX = padL + (series.length - 1) * xStep;
+    var lastY = padT + plotH - ((last - yLo) / yRange) * plotH;
+    ctx.fillStyle = lineColor;
     ctx.beginPath();
-    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Title
     if (chartMode === "networth") {
       els.chartTitle.textContent = "Net Worth";
     }
   }
 
-  // --- news & agent wire ---
+  // News & agents
   function addNews(headline, year, month) {
     if (!headline) return;
-    const item = document.createElement("div");
+    var item = document.createElement("div");
     item.className = "item";
-    item.innerHTML = `<span class="ts">[${year}-${String(month).padStart(2,"0")}]</span>${headline}`;
+    item.innerHTML = '<span class="ts">[' + year + '-' + String(month).padStart(2, "0") + ']</span>' + headline;
     els.newsContent.prepend(item);
-    while (els.newsContent.children.length > 30) {
-      els.newsContent.lastChild.remove();
+    var children = els.newsContent.children;
+    while (children.length > 30) {
+      children[children.length - 1].remove();
     }
   }
 
   function addAgentActions(actions) {
     els.agentLog.innerHTML = "";
     if (!actions || !actions.length) {
-      els.agentLog.innerHTML = '<div class="muted">No agent chatter this month.</div>';
+      els.agentLog.innerHTML = '<div class="muted">No agent activity this month.</div>';
       return;
     }
-    actions.forEach((a) => {
-      const t = (a.actions && a.actions[0]) || {};
-      const entry = document.createElement("div");
+    actions.forEach(function (a) {
+      var t = (a.actions && a.actions[0]) || {};
+      var entry = document.createElement("div");
       entry.className = "agent-entry";
       entry.innerHTML =
-        `<span class="name">${a.agent}</span> ` +
-        `<span class="action">${t.action || "hold"} ${DISPLAY[t.asset] || t.asset || ""}</span>` +
-        `<span class="sentiment">${a.sentiment || ""}</span>` +
-        `<div style="color:var(--phosphor-dim);margin-top:2px;">${t.reason || ""}</div>`;
+        '<span class="name">' + a.agent + '</span> ' +
+        '<span class="action">' + (t.action || "hold") + ' ' + (DISPLAY[t.asset] || t.asset || "") + '</span>' +
+        '<span class="sentiment">' + (a.sentiment || "") + '</span>' +
+        '<div style="color:var(--phosphor-dim);margin-top:2px;">' + (t.reason || "") + '</div>';
       els.agentLog.appendChild(entry);
     });
   }
 
-  // --- game actions (all local) ---
+  // --- Trade ---
   function handleTrade(e) {
     e.preventDefault();
-    if (state.game_over) return;
-    const form = new FormData(els.tradeForm);
-    const assetDisplay = form.get("asset");
-    const action = form.get("action");
-    const pct = parseFloat(form.get("amount")) / 100;
-    const key = Object.keys(DISPLAY).find((k) => DISPLAY[k] === assetDisplay);
-    if (!key) { setStatus("Invalid asset", true); return; }
+    if (state.game_over) { toast("Game is over. Reset to play again.", "warn"); return; }
+    var assetDisplay = els.tradeForm.querySelector("#asset").value;
+    var action = els.actionInput.value;
+    var pct = parseFloat(els.amountInput.value) / 100;
+    var key = Object.keys(DISPLAY).find(function (k) { return DISPLAY[k] === assetDisplay; });
+    if (!key) { toast("Invalid asset selection.", "error"); return; }
+    if (pct <= 0 || pct > 1) { toast("Amount must be 1-100% of portfolio.", "error"); return; }
+
     try {
+      if (action === "buy") {
+        var total = E.totalValue(state);
+        var cost = total * pct;
+        if (cost > state.cash_balance) {
+          toast("Insufficient cash. You need \u20b9" + Math.round(cost).toLocaleString("en-IN") + ".", "error");
+          return;
+        }
+      } else {
+        var qty = state.portfolio[key];
+        if (qty <= 0.0001) { toast("You don't own any " + assetDisplay + ".", "error"); return; }
+      }
       E.executePlayerTrade(state, key, action, pct);
-      addNews(`You ${action} ${pct*100}% ${assetDisplay}`, state.year, state.month);
-      setStatus(`Traded ${action} ${assetDisplay} ${pct*100}%`);
+      addNews("You " + action + " " + (pct * 100).toFixed(0) + "% " + assetDisplay, state.year, state.month);
+      setStatus("Traded: " + action.toUpperCase() + " " + assetDisplay + " " + (pct * 100).toFixed(0) + "%");
+      toast(action.toUpperCase() + " " + assetDisplay + " (" + (pct * 100).toFixed(0) + "%)", "info");
       render();
     } catch (err) {
-      setStatus("Trade failed: " + err.message, true);
+      toast("Trade failed: " + err.message, "error");
     }
   }
 
+  // --- Advance Month ---
   async function handleAdvance() {
-    if (state.game_over) return;
-    setStatus("Advancing month...");
+    if (state.game_over) { toast("Game over. Reset to play again.", "warn"); return; }
+    setStatus("Advancing...");
     els.advanceBtn.disabled = true;
+    els.advanceBtn.textContent = "...";
     try {
-      // Snapshot prices before to compute index deltas
-      prevPrices = { ...state.prices };
+      prevPrices = {};
+      for (var k in state.prices) prevPrices[k] = state.prices[k];
 
-      // Pick the historical event for the *upcoming* month
-      const nextY = state.year + (state.month === 12 ? 1 : 0);
-      const nextM = state.month === 12 ? 1 : state.month + 1;
-      const ev = Ev.eventForMonth(nextY, nextM);
+      var nextY = state.year + (state.month === 12 ? 1 : 0);
+      var nextM = state.month === 12 ? 1 : state.month + 1;
+      var ev = Ev.eventForMonth(nextY, nextM);
 
-      // Local deterministic agent decisions
-      const snap = {
+      var snap = {
         month: state.month, year: state.year,
-        prices: { ...state.prices }, portfolio: { ...state.portfolio },
-        cash: state.cash_balance, total_value: E.totalValue(state),
-        unrealized_pnl: E.totalPnl(state),
+        prices: {}, portfolio: {}, cash: state.cash_balance,
+        total_value: E.totalValue(state), unrealized_pnl: E.totalPnl(state),
       };
-      const agentActions = E.allLocalAgentsDecide(snap, ev);
-      const news = {
+      for (var k2 in state.prices) snap.prices[k2] = state.prices[k2];
+      for (var k3 in state.portfolio) snap.portfolio[k3] = state.portfolio[k3];
+
+      var agentActions = E.allLocalAgentsDecide(snap, ev);
+      var news = {
         headline: ev.headline, regime: ev.regime,
-        impact: { ...ev.impact }, duration_months: ev.duration_months,
+        impact: {}, duration_months: ev.duration_months,
         year: ev.year, month: ev.month,
       };
+      for (var k4 in ev.impact) news.impact[k4] = ev.impact[k4];
+
       E.advanceMonth(state, news, agentActions, ev);
 
       addNews(ev.headline, state.year, state.month);
       addAgentActions(agentActions);
 
-      // AI insight via server LLM (fallback handled server-side)
+      // AI insight
       try {
-        const r = await apiLLM("/api/insight", {
+        var r = await apiLLM("/game-api/insight", {
           event: { headline: ev.headline, regime: ev.regime },
           snapshot: {
             unrealized_pnl: E.totalPnl(state),
@@ -396,111 +458,141 @@
           els.llmBadge.textContent = "FALLBACK";
           els.llmBadge.className = "badge fallback";
         }
-      } catch (e) {
+      } catch (e2) {
         els.insightText.textContent = fallbackInsight(ev, state);
         els.llmBadge.textContent = "FALLBACK";
         els.llmBadge.className = "badge fallback";
       }
 
-      setStatus(`Month advanced → ${state.year}-${String(state.month).padStart(2,"0")}`);
+      var monthLabel = state.year + "-" + String(state.month).padStart(2, "0");
+      setStatus("Month " + state.months_elapsed + "/" + E.GAME_LENGTH_MONTHS + " (" + monthLabel + ")");
+      if (state.game_over) {
+        if (state.won) {
+          toast("YOU WIN! \u20b920L reached. Congratulations!", "info");
+        } else {
+          toast("GAME OVER. 10 years have passed.", "warn");
+        }
+      }
       render();
     } catch (e) {
-      setStatus("Advance failed: " + e.message, true);
+      setStatus("Error: " + e.message, true);
     } finally {
+      els.advanceBtn.textContent = "Advance Month \u23ce";
       if (!state.game_over) els.advanceBtn.disabled = false;
     }
   }
 
   function fallbackInsight(ev, s) {
-    const pnl = E.totalPnl(s);
-    if (pnl < -50000) return `Cut losers in ${ev.regime.replace(/_/g, " ")} regimes and rotate into defensives.`;
-    if (pnl > 50000) return `Book partial profits; ${ev.regime.replace(/_/g, " ")} trends rarely last.`;
-    return `Hold the line through this ${ev.regime.replace(/_/g, " ")} phase.`;
+    var pnl = E.totalPnl(s);
+    var regime = (ev.regime || "stagnation").replace(/_/g, " ");
+    if (pnl < -50000) return "Cut losers in " + regime + " regimes. Rotate into defensives.";
+    if (pnl > 50000) return "Book partial profits. " + regime + " trends rarely last.";
+    return "Hold steady through this " + regime + " phase.";
   }
 
+  // --- Reset ---
   function handleReset() {
-    if (!confirm("Reset terminal and start a new session? (Your current game will be lost.)")) return;
+    if (state.game_over || state.months_elapsed > 0) {
+      if (!confirm("Reset your game? All progress will be lost.")) return;
+    }
     state = E.newGame();
-    prevPrices = { ...state.prices };
-    chatHistory = [];
-    els.chatLog.innerHTML = "";
-    els.newsContent.innerHTML = '<div class="muted">System boot complete. Awaiting first turn...</div>';
+    prevPrices = {};
+    for (var k in state.prices) prevPrices[k] = state.prices[k];
+    els.chatLog.innerHTML = '<div class="chat-msg bot">Welcome back. Ask me about your portfolio or strategy.</div>';
+    els.newsContent.innerHTML = '<div class="muted">System ready. Press Advance Month to begin.</div>';
     els.agentLog.innerHTML = "";
-    els.insightText.textContent = "Advance a month to see the AI's read on the market.";
+    els.insightText.textContent = "Press Advance Month to see AI market commentary.";
     els.advanceBtn.disabled = false;
+    els.advanceBtn.textContent = "Advance Month \u23ce";
     els.tradeBtn.disabled = false;
-    setStatus("Terminal reset");
+    els.progressBar.style.width = "0%";
+    els.progressBar.className = "progress-bar";
+    els.progressLabel.textContent = "Month 0/" + E.GAME_LENGTH_MONTHS;
+    var banner = document.querySelector(".game-over-banner");
+    if (banner) banner.remove();
+    setStatus("Game reset");
+    toast("New game started. Good luck!", "info");
     render();
   }
 
+  // --- Mentor ---
   async function handleMentor() {
-    setStatus("Generating mentor review...");
-    const summary = {
+    var total = E.totalValue(state);
+    var invested = E.investedValue(state);
+    var pnl = E.totalPnl(state);
+
+    // Ensure at least a year has passed
+    if (state.months_elapsed < 1) {
+      toast("Advance at least one month before getting a review.", "warn");
+      return;
+    }
+
+    setStatus("Generating review...");
+    var summary = {
       year: state.year, month: state.month,
       starting_value: E.STARTING_CASH,
-      ending_value: E.totalValue(state),
-      invested_value: E.investedValue(state),
+      ending_value: total,
+      invested_value: invested,
       cash: state.cash_balance,
-      unrealized_pnl: E.totalPnl(state),
+      unrealized_pnl: pnl,
       max_drawdown: -0.25,
       sharpe_ratio: 0.0,
       allocations: computeAllocations(state),
-      ledger: state.ledger.filter((t) => t.year === state.year),
+      ledger: state.ledger.filter(function (t) { return t.year === state.year; }),
     };
-    const r = await apiLLM("/api/mentor", { summary });
+    var r = await apiLLM("/game-api/mentor", { summary: summary });
     if (r && r.review) {
-      els.mentorRoast.textContent = r.review.roast || "—";
-      els.mentorLesson.textContent = `LESSON: ${r.review.lesson || ""}`;
-      els.mentorSuggestion.textContent = `NEXT MOVE: ${r.review.suggestion || ""}`;
+      els.mentorRoast.textContent = r.review.roast || "-";
+      els.mentorLesson.textContent = "LESSON: " + (r.review.lesson || "");
+      els.mentorSuggestion.textContent = "NEXT MOVE: " + (r.review.suggestion || "");
       els.modal.classList.remove("hidden");
-      setStatus("Mentor ready");
+      setStatus("Review ready");
     } else {
-      setStatus("Mentor unavailable", true);
+      toast("Mentor unavailable. Try again.", "error");
     }
   }
 
   function computeAllocations(s) {
-    const total = E.totalValue(s);
-    const out = {};
-    for (const a of E.TRADABLE_KEYS) {
+    var total = E.totalValue(s);
+    var out = {};
+    for (var i = 0; i < E.TRADABLE_KEYS.length; i++) {
+      var a = E.TRADABLE_KEYS[i];
       out[a] = total > 0 ? (s.portfolio[a] * s.prices[a]) / total : 0;
     }
     return out;
   }
 
-  // --- chatbot ---
+  // --- Chat ---
   async function handleChat(e) {
     e.preventDefault();
-    const msg = els.chatInput.value.trim();
+    var msg = els.chatInput.value.trim();
     if (!msg) return;
     appendChat("user", msg);
     els.chatInput.value = "";
-    const snapshot = {
+    var snapshot = {
       cash: state.cash_balance,
       total_value: E.totalValue(state),
       unrealized_pnl: E.totalPnl(state),
       positions: E.TRADABLE_KEYS
-        .filter((k) => state.portfolio[k] > 0)
-        .map((k) => ({
-          asset: DISPLAY[k],
-          qty: state.portfolio[k],
-          price: state.prices[k],
-          value: state.portfolio[k] * state.prices[k],
-        })),
+        .filter(function (k) { return state.portfolio[k] > 0.0001; })
+        .map(function (k) { return {
+          asset: DISPLAY[k], qty: state.portfolio[k],
+          price: state.prices[k], value: state.portfolio[k] * state.prices[k],
+        }; }),
     };
-    const warmId = appendChat("bot", "GPU container warming up... first chat takes a moment.", true);
-    const r = await apiLLM("/api/chat", { message: msg, snapshot });
-    if (warmId && warmId.parentNode) warmId.remove();
+    var warmDiv = appendChat("bot", "Thinking...");
+    var r = await apiLLM("/game-api/chat", { message: msg, snapshot: snapshot });
+    if (warmDiv && warmDiv.parentNode) warmDiv.remove();
     if (r && r.reply) {
-      const isFallback = r.reply.includes("trouble") || r.reply.length < 20;
+      var isFallback = r.reply.indexOf("trouble") >= 0 || r.reply.length < 20;
       appendChat("bot", r.reply, isFallback);
     } else {
-      appendChat("bot", "Connection to mentor lost. Check the terminal and try again.", true);
+      appendChat("bot", "Can't reach the advisor right now. Check your connection.", true);
     }
   }
 
   function appendChat(role, content, fallback) {
-    const div = document.createElement("div");
+    var div = document.createElement("div");
     div.className = "chat-msg " + role + (fallback ? " fallback" : "");
     div.textContent = content;
     els.chatLog.appendChild(div);
@@ -513,10 +605,31 @@
     els.statusLine.style.color = isError ? "var(--red)" : "var(--phosphor-dim)";
   }
 
-  // --- chip controls ---
-  document.querySelectorAll(".chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
+  // --- Side toggle ---
+  function setTradeSide(side) {
+    els.actionInput.value = side;
+    els.sideBuy.classList.toggle("active", side === "buy");
+    els.sideSell.classList.toggle("active", side === "sell");
+    renderTradeBtn();
+  }
+
+  els.sideBuy.addEventListener("click", function () { setTradeSide("buy"); });
+  els.sideSell.addEventListener("click", function () { setTradeSide("sell"); });
+
+  // Amount slider sync
+  els.amountRange.addEventListener("input", function () {
+    els.amountInput.value = els.amountRange.value;
+  });
+  els.amountInput.addEventListener("input", function () {
+    var v = parseInt(els.amountInput.value) || 1;
+    v = Math.max(1, Math.min(100, v));
+    els.amountRange.value = v;
+  });
+
+  // --- Chart chips ---
+  document.querySelectorAll(".chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      document.querySelectorAll(".chip").forEach(function (c) { c.classList.remove("active"); });
       chip.classList.add("active");
       chartMode = chip.dataset.chart;
       els.chartTitle.textContent = chartMode === "networth" ? "Net Worth" : DISPLAY[chartMode];
@@ -525,107 +638,131 @@
     });
   });
 
-  // --- event wiring ---
+  // --- Keyboard shortcuts ---
+  document.addEventListener("keydown", function (e) {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (els.onboarding && !els.onboarding.classList.contains("hidden")) {
+        startGame();
+      } else if (!state.game_over) {
+        handleAdvance();
+      }
+    }
+  });
+
+  // --- Onboarding ---
+  function startGame() {
+    els.onboarding.classList.add("hidden");
+    render();
+    setStatus("Ready - Trade or Advance");
+  }
+
+  els.onboardStart.addEventListener("click", startGame);
+
+  // --- Help modal ---
+  els.helpBtn.addEventListener("click", function () {
+    els.helpModal.classList.remove("hidden");
+  });
+  els.closeHelp.addEventListener("click", function () {
+    els.helpModal.classList.add("hidden");
+  });
+  els.helpModal.addEventListener("click", function (e) {
+    if (e.target === els.helpModal) els.helpModal.classList.add("hidden");
+  });
+
+  // --- Mentor modal close ---
+  els.closeModal.addEventListener("click", function () {
+    els.modal.classList.add("hidden");
+  });
+  els.modal.addEventListener("click", function (e) {
+    if (e.target === els.modal) els.modal.classList.add("hidden");
+  });
+
+  // --- Event wiring ---
   els.tradeForm.addEventListener("submit", handleTrade);
   els.advanceBtn.addEventListener("click", handleAdvance);
   els.mentorBtn.addEventListener("click", handleMentor);
   els.resetBtn.addEventListener("click", handleReset);
-  els.closeModal.addEventListener("click", () => els.modal.classList.add("hidden"));
   els.chatForm.addEventListener("submit", handleChat);
-  window.addEventListener("resize", renderChart);
+  window.addEventListener("resize", function () { requestAnimationFrame(renderChart); });
 
-  // --- boot ---
+  // --- LLM status ---
   function applyLlmStatus(h) {
-    const status = h.llm || "uninitialized";
-    if (status === "loaded") {
-      els.llmStatus.textContent = "LLM: LOCAL";
+    var status = h.llm || "uninitialized";
+    if (status === "modal") {
+      els.llmStatus.textContent = "LLM: CLOUD";
       els.llmStatus.className = "llm-tag loaded";
-      els.llmStatus.title = `Model: ${h.model_path}`;
       els.llmBadge.className = "badge live";
       els.llmBadge.textContent = "LLM";
       els.chatLlmBadge.className = "badge live";
       els.chatLlmBadge.textContent = "LLM";
-      setStatus("Ready (local LLM online)");
-    } else if (status === "modal") {
-      els.llmStatus.textContent = "LLM: CLOUD GPU";
+      setStatus("Ready (cloud GPU)");
+    } else if (status === "hf") {
+      els.llmStatus.textContent = "LLM: HF API";
       els.llmStatus.className = "llm-tag loaded";
-      els.llmStatus.title = h.modal_url
-        ? `Modal: ${h.modal_url} (first chat wakes the GPU container)`
-        : "Modal GPU inference (first chat may take a moment to warm up)";
       els.llmBadge.className = "badge live";
       els.llmBadge.textContent = "LLM";
       els.chatLlmBadge.className = "badge live";
       els.chatLlmBadge.textContent = "LLM";
-      setStatus("Ready (cloud GPU — first chat wakes the container)");
+      setStatus("Ready (HF API)");
     } else if (status === "mock") {
-      els.llmStatus.textContent = "LLM: MOCK";
+      els.llmStatus.textContent = "LLM: LOCAL";
       els.llmStatus.className = "llm-tag mock";
-      els.llmStatus.title = h.llm_error || "Mock mode";
       els.llmBadge.className = "badge fallback";
       els.llmBadge.textContent = "FALLBACK";
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
-      setStatus("Ready (LLM in mock mode — features use deterministic fallbacks)");
-    } else if (status === "loading" || status === "uninitialized") {
-      els.llmStatus.textContent = "LLM: LOADING…";
+      setStatus("Ready (local fallback mode)");
+    } else if (status === "loading") {
+      els.llmStatus.textContent = "LLM: LOADING";
       els.llmStatus.className = "llm-tag loading";
-      els.llmStatus.title = h.llm_error
-        ? `Loading model — ${h.llm_error}`
-        : `Loading model from ${h.model_path}…`;
       els.llmBadge.className = "badge fallback";
       els.llmBadge.textContent = "FALLBACK";
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
-      setStatus("Loading local LLM in the background… (game works either way)");
+      setStatus("Loading LLM...");
     } else {
-      // error
-      const reason = (h.llm_error || "model not loaded").slice(0, 120);
-      const modelInfo = h.model_exists
-        ? `model found (${h.model_size_gb} GB) but failed to initialize`
-        : `model file missing at ${h.model_path}`;
-      els.llmStatus.textContent = "LLM: OFFLINE";
-      els.llmStatus.className = "llm-tag error";
-      els.llmStatus.title = `${reason} — ${modelInfo}`;
+      els.llmStatus.textContent = "LLM: LOCAL";
+      els.llmStatus.className = "llm-tag mock";
       els.llmBadge.className = "badge fallback";
       els.llmBadge.textContent = "FALLBACK";
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
-      setStatus(
-        `LLM offline (${reason}). Chat/mentor use deterministic fallbacks. Game still works.`,
-        true
-      );
+      setStatus("Ready (local fallback)");
     }
   }
 
-  let _lastStatus = null;
+  var lastStatusKey = null;
   async function pollLlm() {
     try {
-      const h = await fetchHealth();
-      const key = `${h.llm || "?"}|${h.llm_error || ""}`;
-      if (key !== _lastStatus) {
-        _lastStatus = key;
+      var h = await fetchHealth();
+      var key = (h.llm || "?") + "|" + (h.llm_error || "");
+      if (key !== lastStatusKey) {
+        lastStatusKey = key;
         applyLlmStatus(h);
       }
-    } catch (e) {
-      /* network blip; ignore */
-    }
+    } catch (e) {}
   }
 
+  // Boot
   (async function boot() {
     await pollLlm();
-    render();
-    // Poll every 3s so the UI tracks the background load in real time
-    // (uninitialized -> loading -> loaded/error). Stop polling once we
-    // reach a terminal state (loaded, mock, or error).
-    const tick = setInterval(async () => {
-      const h = await (await fetch("/api/health").catch(() => null))?.json().catch(() => null);
-      if (!h) return;
-      const cur = h.llm || "?";
-      if (cur !== _lastStatus.split("|")[0]) {
+    // Show onboarding
+    if (els.onboarding) {
+      els.onboarding.classList.remove("hidden");
+    }
+    // Poll LLM status
+    var tick = setInterval(async function () {
+      var h = await (await fetch("/game-api/health").catch(function () { return null; }));
+      if (!h || !h.json) return;
+      try { h = await h.json(); } catch (e) { return; }
+      var cur = h.llm || "?";
+      if (cur !== (lastStatusKey || "").split("|")[0]) {
         applyLlmStatus(h);
-        _lastStatus = `${h.llm || "?"}|${h.llm_error || ""}`;
+        lastStatusKey = (h.llm || "?") + "|" + (h.llm_error || "");
       }
-      if (cur === "loaded" || cur === "mock" || cur === "error" || cur === "modal") {
+      if (cur === "modal" || cur === "mock" || cur === "hf" || cur === "error") {
         clearInterval(tick);
       }
     }, 3000);
