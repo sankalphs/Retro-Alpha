@@ -1,0 +1,8 @@
+tests/screenshots/01_initial.png filter=lfs diff=lfs merge=lfs -text
+tests/screenshots/02_after_trade.png filter=lfs diff=lfs merge=lfs -text
+tests/screenshots/03_after_advance.png filter=lfs diff=lfs merge=lfs -text
+tests/screenshots/04_chat.png filter=lfs diff=lfs merge=lfs -text
+tests/screenshots/04_mentor.png filter=lfs diff=lfs merge=lfs -text
+tests/screenshots/05_game_over.png filter=lfs diff=lfs merge=lfs -text
+tests/screenshots/06_user2.png filter=lfs diff=lfs merge=lfs -text
+tests/screenshots/llm_missing.png filter=lfs diff=lfs merge=lfs -text

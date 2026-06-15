@@ -1,4 +1,4 @@
-# Environment variables
+# Environment
 .env
 .env.local
 .env.*.local
@@ -40,7 +40,7 @@ env/
 *.swo
 *~
 
-# Data and models (generated locally, pushed explicitly)
+# Data and models (generated locally)
 data/
 models/
 *.gguf
@@ -51,9 +51,14 @@ models/
 *.ckpt
 traces/
 
-# Logs
+# Logs and build artifacts
 *.log
 logs/
+space_logs*.txt
+app_content*.html
+check_app*.py
+parse_logs.py
+*.bak
 
 # OS
 .DS_Store
@@ -64,7 +69,7 @@ Thumbs.db
 tmp/
 temp/
 
-# Node / frontend build (if added later)
+# Node
 node_modules/
 *.lock
 
