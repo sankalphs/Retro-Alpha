@@ -57,6 +57,77 @@ def start_background_load() -> None:
     pass
 
 
+def strip_reasoning_narration(text: str) -> str:
+    """Detect and remove model's internal monologue where it repeats
+    instructions/processes the prompt before giving the actual answer.
+    Nemotron often outputs its reasoning as plain text, e.g.:
+      'User wants a single sentence... Output only the sentence. Hold cash.'
+    We keep only the actual answer portion."""
+    if not text:
+        return text
+
+    # Split into paragraphs (double-newline preferred, single newline as fallback)
+    paras = re.split(r'\n\s*\n', text)
+    paras = [p.strip() for p in paras if p.strip()]
+    if len(paras) <= 1:
+        # Try single newlines
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if len(lines) <= 1:
+            return text
+        paras = lines
+
+    if len(paras) <= 1:
+        return text
+
+    # Reasoning markers: phrases the model uses when talking to itself
+    reasoning_markers = [
+        r'^user\s+(wants|says|asks|is\s|needs|has|gave|provided)',
+        r'^the\s+user\s',
+        r'^(i\s+)?need\s+to\s',
+        r'^(let|let\'s)\s+(me\s+|us\s+)?(think|analyze|consider|check|review|break|figure|process|reason)',
+        r'^(we|i)\s+(need|should|must|have\s+to|want)\s',
+        r'^output\s+only\s',
+        r'^(this|it)\s+(is|seems|appears|looks)\s+(like|to\s+be)',
+        r'^(okay|ok|so|alright|well|now|right|hmm|hmmm)[\s,]+',
+        r'^the\s+(task|prompt|instruction|request|question)\s',
+        r'^(based|given)\s+(on|the)\s',
+        r'^respond\s+(with|to|as)\s',
+        r'^reply\s+(with|to|as)\s',
+        r'^(my|the)\s+(response|reply|answer|output)\s+(should|must|needs|will|is)\s',
+        r'^starting\s+portfolio',
+        r'^portfolio[\s:]+',
+        r'^\d+%\s+cash',
+        r'^(total|pnl|sharpe|drawdown)[\s:]+',
+        r'^that\'?s\s+\d+\s+sentenc',
+        r'^in\s+(ai|the)\s+(insight|chat|advisory)',
+        r'^need\s+(to\s+)?be\s+under\s',
+        r'^so\s+reply',
+        r'^keep\s+in\s+character',
+    ]
+
+    # Classify each paragraph as reasoning or answer
+    results = []
+    for para in paras:
+        plow = para.lower().strip()
+        is_reasoning = False
+        for pattern in reasoning_markers:
+            if re.search(pattern, plow):
+                is_reasoning = True
+                break
+        results.append((para, is_reasoning))
+
+    # If the first paragraph is reasoning, take the last non-reasoning paragraph
+    if results and results[0][1]:
+        for para, is_r in reversed(results):
+            if not is_r:
+                return para.strip()
+        # All paragraphs look like reasoning — take the last one since it's
+        # most likely the answer (model often ends with the actual response)
+        return results[-1][0].strip()
+
+    return text
+
+
 def clean_text(text: str) -> str:
     """Aggressively strip model cruft: think blocks, AI prefixes, markdown, noise."""
     if not text or not text.strip():
@@ -75,6 +146,9 @@ def clean_text(text: str) -> str:
         else:
             text = text[:s].strip()
             break
+
+    # Strip reasoning narration (model talking to itself)
+    text = strip_reasoning_narration(text)
 
     # Remove common AI preamble patterns (must be at start of text followed by colon/newline)
     prefixes_to_strip = [
@@ -115,7 +189,8 @@ def clean_text(text: str) -> str:
 
 
 def sanitize_for_display(text: str, max_chars: int = 500) -> str:
-    """Final polish before showing to the player: strip remaining cruft, truncate."""
+    """Final polish before showing to the player: full clean + truncate."""
+    text = clean_text(text)
     if not text or not text.strip():
         return ""
     text = text.strip()
