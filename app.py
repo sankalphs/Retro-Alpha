@@ -2,18 +2,15 @@
 Retro Alpha - 90s Indian Stock Market Survival Game
 Gradio app for HuggingFace Spaces (Build Small Hackathon).
 
-Game engine runs 100% in the browser.
-Server handles LLM-backed features: chat, mentor, insight.
-No per-user state; every browser tab is independent.
+Serves a self-contained HTML page at root via an ASGI wrapper.
+Gradio handles the API routes; root GET bypasses Gradio entirely.
 """
-
 import os
 from pathlib import Path
 
 import gradio as gr
 from fastapi import Request
 from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 
 import agents
 import mentor as _mentor
@@ -22,32 +19,52 @@ ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
 
-def get_full_html():
-    with open(STATIC_DIR / "index.html", "r", encoding="utf-8") as f:
+def _read(p: str) -> str:
+    with open(STATIC_DIR / p, "r", encoding="utf-8") as f:
         return f.read()
 
 
-with gr.Blocks(
-    title="Retro Alpha",
-    fill_width=True,
-    fill_height=True,
-    css="""
-    .gradio-container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
-    .contain { padding: 0 !important; max-width: none !important; }
-    .main { padding: 0 !important; }
-    footer { display: none !important; }
-    #retro-root { width: 100vw; height: 100vh; overflow: hidden; }
-    #retro-root iframe { width: 100%; height: 100%; border: none; }
-    """,
-) as demo:
-    full_html = get_full_html()
-    gr.HTML(full_html, elem_id="retro-root")
+_CSS = _read("style.css")
+_HTML_BODY = _read("index.html")
+_ENGINE_JS = _read("engine.js")
+_EVENTS_JS = _read("events.js")
+_APP_JS = _read("app.js")
 
-app = demo.app
-app.mount("/game", StaticFiles(directory=str(STATIC_DIR)), name="game_static")
+PAGE = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Retro Alpha - 90s Market Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+{_CSS}
+</style>
+</head>
+<body>
+{_HTML_BODY}
+<script>
+{_EVENTS_JS}
+</script>
+<script>
+{_ENGINE_JS}
+</script>
+<script>
+{_APP_JS}
+</script>
+</body>
+</html>"""
 
 
-@app.get("/game-api/health")
+with gr.Blocks(title="Retro Alpha") as demo:
+    pass
+
+api = demo.app
+
+
+@api.get("/game-api/health")
 def health() -> JSONResponse:
     return JSONResponse({
         "status": "ok",
@@ -56,7 +73,7 @@ def health() -> JSONResponse:
     })
 
 
-@app.post("/game-api/chat")
+@api.post("/game-api/chat")
 async def chat(request: Request) -> JSONResponse:
     data = await request.json()
     user_message = str(data.get("message", "")).strip()
@@ -71,7 +88,7 @@ async def chat(request: Request) -> JSONResponse:
     return JSONResponse({"reply": reply})
 
 
-@app.post("/game-api/insight")
+@api.post("/game-api/insight")
 async def insight(request: Request) -> JSONResponse:
     data = await request.json()
     event = data.get("event") or {}
@@ -84,7 +101,7 @@ async def insight(request: Request) -> JSONResponse:
     return JSONResponse({"insight": text})
 
 
-@app.post("/game-api/mentor")
+@api.post("/game-api/mentor")
 async def mentor_review(request: Request) -> JSONResponse:
     data = await request.json()
     summary = data.get("summary") or {}
@@ -101,13 +118,25 @@ async def mentor_review(request: Request) -> JSONResponse:
     return JSONResponse({"review": review})
 
 
+# ASGI wrapper: intercept root GET before Gradio's router
+_gradio_app = api
+
+
+async def app(scope, receive, send):
+    if scope["type"] == "http" and scope["method"] == "GET" and scope["path"] == "/":
+        response = HTMLResponse(PAGE)
+        await response(scope, receive, send)
+        return
+    await _gradio_app(scope, receive, send)
+
+
 def launch():
     agents.start_background_load()
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=int(os.environ.get("PORT", "7860")),
-        favicon_path=None,
-        show_error=True,
+    import uvicorn
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "7860")),
     )
 
 
