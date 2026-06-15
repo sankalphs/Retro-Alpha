@@ -439,30 +439,10 @@
       addNews(ev.headline, state.year, state.month);
       addAgentActions(agentActions);
 
-      // AI insight
-      try {
-        var r = await apiLLM("/game-api/insight", {
-          event: { headline: ev.headline, regime: ev.regime },
-          snapshot: {
-            unrealized_pnl: E.totalPnl(state),
-            cash: state.cash_balance,
-            total_value: E.totalValue(state),
-          },
-        });
-        if (r && r.insight) {
-          els.insightText.textContent = r.insight;
-          els.llmBadge.textContent = "LLM";
-          els.llmBadge.className = "badge live";
-        } else {
-          els.insightText.textContent = fallbackInsight(ev, state);
-          els.llmBadge.textContent = "FALLBACK";
-          els.llmBadge.className = "badge fallback";
-        }
-      } catch (e2) {
-        els.insightText.textContent = fallbackInsight(ev, state);
-        els.llmBadge.textContent = "FALLBACK";
-        els.llmBadge.className = "badge fallback";
-      }
+      // Show deterministic insight (AI insight only on demand)
+      var detInsight = fallbackInsight(ev, state);
+      els.insightText.textContent = detInsight;
+      els.insightText.className = "insight-text deterministic";
 
       var monthLabel = state.year + "-" + String(state.month).padStart(2, "0");
       setStatus("Month " + state.months_elapsed + "/" + E.GAME_LENGTH_MONTHS + " (" + monthLabel + ")");
@@ -490,6 +470,41 @@
     return "Hold steady through this " + regime + " phase.";
   }
 
+  async function generateInsight() {
+    if (state.game_over) return;
+    var ev = Ev.eventForMonth(state.year, state.month);
+    els.insightText.textContent = "Generating...";
+    els.insightText.className = "insight-text";
+    els.llmBadge.textContent = "...";
+    els.llmBadge.className = "badge";
+    try {
+      var r = await apiLLM("/game-api/insight", {
+        event: { headline: ev.headline, regime: ev.regime },
+        snapshot: {
+          unrealized_pnl: E.totalPnl(state),
+          cash: state.cash_balance,
+          total_value: E.totalValue(state),
+        },
+      });
+      if (r && r.insight) {
+        els.insightText.textContent = r.insight;
+        els.insightText.className = "insight-text";
+        els.llmBadge.textContent = "LLM";
+        els.llmBadge.className = "badge live";
+      } else {
+        els.insightText.textContent = fallbackInsight(ev, state);
+        els.insightText.className = "insight-text deterministic";
+        els.llmBadge.textContent = "FALLBACK";
+        els.llmBadge.className = "badge fallback";
+      }
+    } catch (e2) {
+      els.insightText.textContent = fallbackInsight(ev, state);
+      els.insightText.className = "insight-text deterministic";
+      els.llmBadge.textContent = "FALLBACK";
+      els.llmBadge.className = "badge fallback";
+    }
+  }
+
   // --- Reset ---
   function handleReset() {
     if (state.game_over || state.months_elapsed > 0) {
@@ -501,7 +516,10 @@
     els.chatLog.innerHTML = '<div class="chat-msg bot">Welcome back. Ask me about your portfolio or strategy.</div>';
     els.newsContent.innerHTML = '<div class="muted">System ready. Press Advance Month to begin.</div>';
     els.agentLog.innerHTML = "";
-    els.insightText.textContent = "Press Advance Month to see AI market commentary.";
+    els.insightText.textContent = "Click Generate to get AI market commentary.";
+    els.insightText.className = "insight-text deterministic";
+    els.llmBadge.textContent = "OFF";
+    els.llmBadge.className = "badge fallback";
     els.advanceBtn.disabled = false;
     els.advanceBtn.textContent = "Advance Month \u23ce";
     els.tradeBtn.disabled = false;
@@ -687,6 +705,9 @@
   els.chatForm.addEventListener("submit", handleChat);
   window.addEventListener("resize", function () { requestAnimationFrame(renderChart); });
 
+  // Generate insight on demand
+  document.getElementById("insight-generate-btn").addEventListener("click", generateInsight);
+
   // --- LLM status ---
   function applyLlmStatus(h) {
     var status = h.llm || "uninitialized";
@@ -710,7 +731,7 @@
       els.llmStatus.textContent = "LLM: LOCAL";
       els.llmStatus.className = "llm-tag mock";
       els.llmBadge.className = "badge fallback";
-      els.llmBadge.textContent = "FALLBACK";
+      els.llmBadge.textContent = "OFF";
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
       setStatus("Ready (local fallback mode)");
@@ -718,7 +739,7 @@
       els.llmStatus.textContent = "LLM: LOADING";
       els.llmStatus.className = "llm-tag loading";
       els.llmBadge.className = "badge fallback";
-      els.llmBadge.textContent = "FALLBACK";
+      els.llmBadge.textContent = "OFF";
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
       setStatus("Loading LLM...");
@@ -726,7 +747,7 @@
       els.llmStatus.textContent = "LLM: LOCAL";
       els.llmStatus.className = "llm-tag mock";
       els.llmBadge.className = "badge fallback";
-      els.llmBadge.textContent = "FALLBACK";
+      els.llmBadge.textContent = "OFF";
       els.chatLlmBadge.className = "badge fallback";
       els.chatLlmBadge.textContent = "FALLBACK";
       setStatus("Ready (local fallback)");

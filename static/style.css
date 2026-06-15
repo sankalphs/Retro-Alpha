@@ -261,6 +261,7 @@ canvas { width: 100%; height: 100%; display: block; }
 .insight-panel { flex: 0 0 auto; }
 .insight-text { font-size: 0.9rem; line-height: 1.5; color: var(--phosphor); padding: 4px 0; }
 .insight-text strong { color: var(--amber); }
+.insight-text.deterministic { color: var(--phosphor-dim); font-style: italic; }
 .badge {
   font-size: 0.55rem; padding: 1px 5px; border: 1px solid var(--phosphor-dim);
   border-radius: 8px; color: var(--phosphor-dim); letter-spacing: 1px;
@@ -336,6 +337,7 @@ select:focus, input:focus { border-color: var(--phosphor); box-shadow: 0 0 8px v
 .btn:hover { background: rgba(51,255,51,0.1); border-color: var(--phosphor); box-shadow: 0 0 10px var(--phosphor-dim); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-sm { padding: 2px 8px; font-size: 0.6rem; letter-spacing: 0.5px; }
 .btn-primary { border-color: var(--phosphor); color: var(--phosphor-glow); }
 .btn-secondary { border-color: var(--amber); color: var(--amber); }
 .btn-secondary:hover { background: rgba(255,176,0,0.12); }

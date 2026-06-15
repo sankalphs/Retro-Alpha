@@ -66,19 +66,6 @@ def strip_reasoning_narration(text: str) -> str:
     if not text:
         return text
 
-    # Split into paragraphs (double-newline preferred, single newline as fallback)
-    paras = re.split(r'\n\s*\n', text)
-    paras = [p.strip() for p in paras if p.strip()]
-    if len(paras) <= 1:
-        # Try single newlines
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        if len(lines) <= 1:
-            return text
-        paras = lines
-
-    if len(paras) <= 1:
-        return text
-
     # Reasoning markers: phrases the model uses when talking to itself
     reasoning_markers = [
         r'^user\s+(wants|says|asks|is\s|needs|has|gave|provided)',
@@ -86,6 +73,7 @@ def strip_reasoning_narration(text: str) -> str:
         r'^(i\s+)?need\s+to\s',
         r'^(let|let\'s)\s+(me\s+|us\s+)?(think|analyze|consider|check|review|break|figure|process|reason)',
         r'^(we|i)\s+(need|should|must|have\s+to|want)\s',
+        r'^we\s+need\s+(to\s+)?output\s+(one|a)\s+sentence',
         r'^output\s+only\s',
         r'^(this|it)\s+(is|seems|appears|looks)\s+(like|to\s+be)',
         r'^(okay|ok|so|alright|well|now|right|hmm|hmmm)[\s,]+',
@@ -103,7 +91,22 @@ def strip_reasoning_narration(text: str) -> str:
         r'^need\s+(to\s+)?be\s+under\s',
         r'^so\s+reply',
         r'^keep\s+in\s+character',
+        r'^i\s+(am|will|would|can)\s+(now\s+)?(give|provide|output|share|generate)',
+        r'^(here\s+is|here\'s)\s+(the|my|a|an)\s+(insight|response|answer|sentence)',
     ]
+
+    # Split into paragraphs (double-newline preferred, single newline as fallback)
+    paras = re.split(r'\n\s*\n', text)
+    paras = [p.strip() for p in paras if p.strip()]
+    if len(paras) <= 1:
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if len(lines) <= 1:
+            # Single block — try sentence-level extraction
+            return _strip_reasoning_sentences(text, reasoning_markers)
+        paras = lines
+
+    if len(paras) <= 1:
+        return _strip_reasoning_sentences(text, reasoning_markers)
 
     # Classify each paragraph as reasoning or answer
     results = []
@@ -116,23 +119,76 @@ def strip_reasoning_narration(text: str) -> str:
                 break
         results.append((para, is_reasoning))
 
-    # If the first paragraph is reasoning, take the last non-reasoning paragraph
     if results and results[0][1]:
         for para, is_r in reversed(results):
             if not is_r:
                 return para.strip()
-        # All paragraphs look like reasoning — take the last one since it's
-        # most likely the answer (model often ends with the actual response)
         return results[-1][0].strip()
 
     return text
 
 
-def clean_text(text: str) -> str:
+def _strip_reasoning_sentences(text: str, reasoning_markers: list) -> str:
+    """For single-paragraph text, split into sentences and remove reasoning ones."""
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    if len(sentences) <= 1:
+        # Try comma-splitting for run-on model output
+        sentences = re.split(r'(?<=[.,;])\s+(?=[A-Z])', text)
+    if len(sentences) <= 1:
+        return text
+
+    results = []
+    for s in sentences:
+        slow = s.lower().strip()
+        is_reasoning = False
+        for pattern in reasoning_markers:
+            if re.search(pattern, slow):
+                is_reasoning = True
+                break
+        results.append((s, is_reasoning))
+
+    answer_parts = [s for s, is_r in results if not is_r]
+    if answer_parts:
+        return ' '.join(answer_parts).strip()
+
+    # If all sentences look like reasoning, take the last one (model often ends with answer)
+    return results[-1][0].strip()
+
+
+def _strip_prompt_echo(text: str, prompt: str = "", system: str = "") -> str:
+    """Remove the echoed prompt from the model output.
+    Some backends return prompt + generated text."""
+    if not text:
+        return text
+    candidates = []
+    if system:
+        candidates.append(system.strip().rstrip('.'))
+    if prompt:
+        candidates.append(prompt.strip().rstrip('.'))
+    for cand in candidates:
+        if not cand:
+            continue
+        idx = text.lower().find(cand.lower()[:min(len(cand), 60)])
+        if idx == 0 or (idx > 0 and idx < 20 and text[:idx].strip() in ("", "system\n", "System:", "Assistant:")):
+            # Found the prompt at the start; cut right after it
+            end = idx + len(cand)
+            # Also consume trailing whitespace/newlines/delimiters
+            while end < len(text) and text[end] in (' ', '\n', '\r', '\t', ':', ',', '-', '.'):
+                end += 1
+            text = text[end:].strip()
+            break
+    return text
+
+
+def clean_text(text: str, prompt: str = "", system: str = "") -> str:
     """Aggressively strip model cruft: think blocks, AI prefixes, markdown, noise."""
     if not text or not text.strip():
         return ""
     text = text.strip()
+
+    # Strip echoed prompt (model repeating the instruction back)
+    if prompt or system:
+        text = _strip_prompt_echo(text, prompt, system)
 
     # Strip all <think>...</think> blocks (including nested/malformed)
     while "<think" in text.lower():
@@ -250,7 +306,7 @@ def _modal_generate(prompt: str, system: str, max_tokens: int = 256, temperature
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
             if isinstance(content, str) and content.strip():
-                return clean_text(content)
+                return clean_text(content, prompt=prompt, system=system)
         except Exception as e:
             print(f"Modal inference attempt {attempt + 1} failed: {e}")
             if attempt == 0:
@@ -283,14 +339,21 @@ def _hf_generate(prompt: str, system: str, max_tokens: int = 256, temperature: f
         )
         resp.raise_for_status()
         data = resp.json()
+
+        # Handle various HF response formats
         if isinstance(data, list) and data and "generated_text" in data[0]:
             content = data[0]["generated_text"]
             if isinstance(content, str) and content.strip():
-                return clean_text(content)
+                return clean_text(content, prompt=prompt, system=system)
         if isinstance(data, dict) and "generated_text" in data:
             content = data["generated_text"]
             if isinstance(content, str) and content.strip():
-                return clean_text(content)
+                return clean_text(content, prompt=prompt, system=system)
+        # Chat-format response (choices array)
+        if isinstance(data, dict) and "choices" in data:
+            content = data["choices"][0].get("message", {}).get("content", "")
+            if isinstance(content, str) and content.strip():
+                return clean_text(content, prompt=prompt, system=system)
     except Exception as e:
         print(f"HF inference failed: {e}")
     return ""
@@ -419,7 +482,7 @@ def generate_insight(event: Dict, state_snapshot: Dict) -> str:
         f"One actionable sentence."
     )
     try:
-        text = generate(prompt, system=system, max_tokens=80, temperature=0.4).strip()
+        text = generate(prompt, system=system, max_tokens=100, temperature=0.4).strip()
         text = sanitize_for_display(text, 200)
     except Exception:
         text = ""
