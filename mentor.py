@@ -1,10 +1,9 @@
 """Sharpe Ratio Mentor — year-end review generator."""
 
-import json
 import re
 from typing import Dict
 
-from agents import generate
+from agents import generate, clean_text, sanitize_for_display
 
 
 def _deterministic_review(summary: Dict) -> Dict:
@@ -65,36 +64,36 @@ def _deterministic_review(summary: Dict) -> Dict:
 
 
 def parse_mentor_response(response: str, summary: Dict) -> dict:
-    """Parse the LLM's structured review. Falls back to a numeric roast
-    derived from the summary if the LLM output is empty or malformed,
-    so the player never sees a raw 'Parse error' message."""
     if not response or not response.strip():
         return _deterministic_review(summary)
 
-    text = response.strip()
+    text = clean_text(response)
+    if not text:
+        return _deterministic_review(summary)
+
     roast = sharpe_s = lesson = suggestion = None
     try:
-        m = re.search(r"roast:\s*(.+)", text)
+        m = re.search(r"roast:\s*(.+)", text, re.IGNORECASE)
         if m:
-            roast = m.group(1).strip()
+            roast = sanitize_for_display(m.group(1).strip(), 80)
     except Exception:
         pass
     try:
-        m = re.search(r"sharpe_ratio:\s*([-\d.]+)", text)
+        m = re.search(r"sharpe_ratio:\s*([-\d.]+)", text, re.IGNORECASE)
         if m:
             sharpe_s = float(m.group(1))
     except Exception:
         pass
     try:
-        m = re.search(r"lesson:\s*(.+)", text)
+        m = re.search(r"lesson:\s*(.+)", text, re.IGNORECASE)
         if m:
-            lesson = m.group(1).strip()
+            lesson = sanitize_for_display(m.group(1).strip(), 140)
     except Exception:
         pass
     try:
-        m = re.search(r"suggestion:\s*(.+)", text)
+        m = re.search(r"suggestion:\s*(.+)", text, re.IGNORECASE)
         if m:
-            suggestion = m.group(1).strip()
+            suggestion = sanitize_for_display(m.group(1).strip(), 80)
     except Exception:
         pass
 
@@ -110,11 +109,12 @@ def parse_mentor_response(response: str, summary: Dict) -> dict:
 def generate_review(summary: dict) -> dict:
     system = (
         "You are a sarcastic but caring Indian finance professor in a video game. "
-        "Output a year-end review in EXACT format (one line each):\n"
+        "Output ONLY these 4 lines, nothing else:\n"
         "roast: <witty roast, under 60 chars>\n"
         "sharpe_ratio: <number, e.g. 0.85>\n"
         "lesson: <explain Sharpe ratio simply, under 100 chars>\n"
-        "suggestion: <one concrete tip, under 60 chars>"
+        "suggestion: <one concrete tip, under 60 chars>\n"
+        "No thinking tags, no markdown, no extra text."
     )
     prompt = (
         f"Starting ₹{summary['starting_value']:,.0f}. "

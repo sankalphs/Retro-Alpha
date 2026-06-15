@@ -58,14 +58,85 @@ def start_background_load() -> None:
 
 
 def clean_text(text: str) -> str:
+    """Aggressively strip model cruft: think blocks, AI prefixes, markdown, noise."""
+    if not text or not text.strip():
+        return ""
     text = text.strip()
-    while "<think>" in text and "</think>" in text:
-        s = text.find("<think>")
-        e = text.find("</think>") + len("</think>")
-        text = text[:s] + text[e:]
-    if "</think>" in text:
-        e = text.find("</think>") + len("</think>")
-        text = text[e:]
+
+    # Strip all <think>...</think> blocks (including nested/malformed)
+    while "<think" in text.lower():
+        s = text.lower().find("<think")
+        e = text.find(">", s)
+        tag_end = e + 1 if e != -1 else s + 7
+        close = text.lower().find("</think", tag_end)
+        if close != -1:
+            close_end = text.find(">", close)
+            text = (text[:s] + text[(close_end + 1) if close_end != -1 else (close + 8):]).strip()
+        else:
+            text = text[:s].strip()
+            break
+
+    # Remove common AI preamble patterns (must be at start of text followed by colon/newline)
+    prefixes_to_strip = [
+        "assistant:", "ai:", "bot:", "response:", "reply:",
+        "here is", "here's", "okay",
+    ]
+    for prefix in prefixes_to_strip:
+        low = text.lower().strip()
+        if low.startswith(prefix):
+            after = text[len(prefix):].strip()
+            if after.startswith(':') or after.startswith(',') or after.startswith('-'):
+                after = after[1:].strip()
+            if len(after) > len(prefix):
+                text = after
+                break
+
+    # Remove markdown formatting
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    text = re.sub(r'^[#\-\*>]+\s*', '', text, flags=re.MULTILINE)
+
+    # Collapse multiple newlines into max 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # Strip JSON wrapper if present
+    try:
+        if text.startswith('{') and text.endswith('}'):
+            data = json.loads(text)
+            for key in ('insight', 'reply', 'text', 'content', 'response', 'message', 'output'):
+                if key in data and isinstance(data[key], str) and data[key].strip():
+                    text = data[key]
+                    break
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    return text.strip()
+
+
+def sanitize_for_display(text: str, max_chars: int = 500) -> str:
+    """Final polish before showing to the player: strip remaining cruft, truncate."""
+    if not text or not text.strip():
+        return ""
+    text = text.strip()
+    # Remove any remaining <think> fragments (case insensitive)
+    text = re.sub(r'</?think[^>]*>', '', text, flags=re.IGNORECASE)
+    # Strip field-name prefixes from structured output (insight:, roast:, etc.)
+    for field in ('insight', 'roast', 'lesson', 'suggestion', 'reply', 'response',
+                  'agent', 'action', 'reason', 'sentiment', 'headline', 'output',
+                  'text', 'content'):
+        prefix = field + ':'
+        low = text.lower()
+        if low.startswith(prefix):
+            text = text[len(prefix):].strip()
+    # Remove lines that are just whitespace
+    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+    # Ensure it starts with a capital letter
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    # Truncate to max chars at word boundary
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(' ', 1)[0]
     return text.strip()
 
 
@@ -171,11 +242,11 @@ def mock_generate(prompt: str, system: str = "") -> str:
 def parse_agent_response(response: str, persona: str) -> Dict:
     response = clean_text(response)
     try:
-        m_agent = re.search(r"agent:\s*(\w+)", response)
+        m_agent = re.search(r"agent:\s*(\w+)", response, re.IGNORECASE)
         agent = (m_agent.group(1).lower() if m_agent else persona) or persona
-        m_action = re.search(r"action:\s*(buy|sell|hold)\s+(\w+)\s+([\d.%]+)", response)
-        m_reason = re.search(r"reason:\s*(.+)", response)
-        m_sent = re.search(r"sentiment:\s*(\w+)", response)
+        m_action = re.search(r"action:\s*(buy|sell|hold)\s+(\w+)\s+([\d.%]+)", response, re.IGNORECASE)
+        m_reason = re.search(r"reason:\s*(.+)", response, re.IGNORECASE)
+        m_sent = re.search(r"sentiment:\s*(\w+)", response, re.IGNORECASE)
         if not m_action:
             return {"agent": agent, "actions": [{"asset": "cash", "action": "hold", "amount_pct": 0.0, "reason": "no action"}], "sentiment": "neutral"}
         return {
@@ -195,9 +266,9 @@ def parse_agent_response(response: str, persona: str) -> Dict:
 def parse_news_response(response: str) -> Dict:
     response = clean_text(response)
     try:
-        m_head = re.search(r"headline:\s*(.+)", response)
-        m_imp = re.search(r"impact:\s*(.+?)(?:\nduration:|$)", response, re.DOTALL)
-        m_dur = re.search(r"duration:\s*(\d+)", response)
+        m_head = re.search(r"headline:\s*(.+)", response, re.IGNORECASE)
+        m_imp = re.search(r"impact:\s*(.+?)(?:\nduration:|$)", response, re.DOTALL | re.IGNORECASE)
+        m_dur = re.search(r"duration:\s*(\d+)", response, re.IGNORECASE)
         headline = m_head.group(1).strip() if m_head else "Markets mixed"
         impact = {}
         if m_imp:
@@ -264,7 +335,8 @@ def generate_insight(event: Dict, state_snapshot: Dict) -> str:
     system = (
         "You are a sharp Indian markets commentator. Given a market event "
         "and a player's portfolio snapshot, output ONE sentence (under 140 chars) "
-        "of actionable insight. No preamble. Start with the verb."
+        "of actionable insight. Reply ONLY with the insight text. "
+        "No prefixes, no markdown, no thinking tags, no explanations."
     )
     prompt = (
         f"Event: {headline} (regime: {regime}). "
@@ -273,6 +345,7 @@ def generate_insight(event: Dict, state_snapshot: Dict) -> str:
     )
     try:
         text = generate(prompt, system=system, max_tokens=80, temperature=0.4).strip()
+        text = sanitize_for_display(text, 200)
     except Exception:
         text = ""
     if not text:
@@ -299,8 +372,8 @@ def chat_reply(user_message: str, state_snapshot: Dict) -> str:
     system = (
         "You are Retro Alpha, a sharp Indian markets assistant in a 1990s "
         "stock-trading game. Be concise, witty, and grounded in the player's "
-        "actual positions. 2-3 short sentences max. Reply directly — "
-        "never output your thought process or reasoning."
+        "actual positions. Output ONLY 2-3 short sentences. "
+        "No thinking tags, no markdown, no prefixes, no explanations."
     )
     prompt = (
         f"Portfolio: total ₹{total:,.0f}, cash ₹{cash:,.0f}, "
@@ -309,6 +382,7 @@ def chat_reply(user_message: str, state_snapshot: Dict) -> str:
     )
     try:
         text = generate(prompt, system=system, max_tokens=140, temperature=0.5).strip()
+        text = sanitize_for_display(text, 500)
     except Exception:
         text = ""
     if not text:
