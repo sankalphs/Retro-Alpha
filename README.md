@@ -20,7 +20,7 @@ tags:
 
 Built for the [🤗 Build Small Hackathon](https://huggingface.co/build-small-hackathon).
 
-👉 **[Play the game on HF Spaces](https://huggingface.co/spaces/sankalphs/retro-alpha)**
+👉 **[Play the game on HF Spaces](https://huggingface.co/spaces/build-small-hackathon/retro)**
 
 ---
 
